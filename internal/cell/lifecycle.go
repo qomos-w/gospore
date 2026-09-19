@@ -216,6 +216,15 @@ func (c *Cell) destroyCore() {
 // invoke OnStop/OnDestroy while OnInit is still running — the actor sees
 // a half-initialized state, which is the documented trade-off versus
 // leaking handles opened before registration completed.
+//
+// Embedder adaptation (mandatory for persistence actors): OnStop running
+// before OnInit's Load completes means an unconditional full-state Save
+// in OnStop will overwrite real records with the zero value — data
+// erasure, strictly worse than a leaked handle. This was not reachable
+// before ForceCleanup existed and bit a real embedder (7 actors fixed by
+// adding a loaded-flag guard: OnStop skips persistence unless Load's
+// success path completed; Save itself stays ungated). Persistence actors
+// embedding gospore must apply the same guard.
 func (c *Cell) ForceCleanup() {
 	if c.state.Load() >= cellIdle {
 		// Idle already reached via the message path; only the destroy
