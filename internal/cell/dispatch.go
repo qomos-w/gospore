@@ -237,12 +237,16 @@ func (c *Cell) invokeCall(inv *handler.Invoker, env mailbox.Envelope, reply func
 			},
 		}
 		invokeEnv.Context = newCallContext(c, invokeEnv)
-		if inv.Script != nil && c.scriptRuntime != nil {
-			if err := c.scriptRuntime.invoke(inv, invokeEnv); err != nil {
-				invokeErr = err
-				invokeEnv.Reply(message.Frame{Kind: message.KindError, Body: []byte(err.Error())})
-				invokeEnv.Reply(message.Frame{Kind: message.KindEnd})
-				return
+		if inv.Script != nil {
+			if sr := c.scriptRuntimeRef(); sr != nil {
+				if err := sr.invoke(inv, invokeEnv); err != nil {
+					invokeErr = err
+					invokeEnv.Reply(message.Frame{Kind: message.KindError, Body: []byte(err.Error())})
+					invokeEnv.Reply(message.Frame{Kind: message.KindEnd})
+					return
+				}
+			} else {
+				inv.Run(invokeEnv)
 			}
 		} else {
 			inv.Run(invokeEnv)

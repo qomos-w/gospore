@@ -481,6 +481,15 @@ func (c *Cell) currentActor() actor.Actor {
 	return c.actor
 }
 
+// scriptRuntimeRef returns the script runtime owner under the actor lock.
+// handleRestart swaps c.scriptRuntime under actorMu; the dispatch hot path
+// and lifecycle component-binding must not read it unsynchronized.
+func (c *Cell) scriptRuntimeRef() *scriptRuntimeOwner {
+	c.actorMu.RLock()
+	defer c.actorMu.RUnlock()
+	return c.scriptRuntime
+}
+
 // Handlers returns the cell's callable table.
 func (c *Cell) Handlers() *handler.Table {
 	c.actorMu.RLock()

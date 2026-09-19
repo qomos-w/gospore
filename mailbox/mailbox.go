@@ -1,6 +1,7 @@
-// Package mailbox holds the Envelope type and system-message payloads.
-// The Mailbox queue implementation has been removed; Cells now receive
-// messages directly via Cell.Recv().
+// Package mailbox holds the Envelope type and system-message payloads
+// (Watch/Unwatch/Stop and similar control-plane messages that travel in
+// the Payload slot). Despite the historical name there is no queue here:
+// delivery is Cell.Recv-driven via DeliveryHost.Deliver.
 package mailbox
 
 import (

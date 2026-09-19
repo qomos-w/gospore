@@ -25,32 +25,37 @@ func (c *Cell) openIngressLoops() {
 	// Step 1 – ownerQ: drain old → new. The owner loop is NOT started here;
 	// handleStart starts it after OnStart completes so business messages
 	// never race the actor's startup state reconstruction.
-	oldOwnerQ := c.ownerQ
 	c.ownerQMu.Lock()
+	oldOwnerQ := c.ownerQ
 	c.ownerQ = make(chan mailbox.Envelope, ownerQueueCapacity)
 	c.ownerQClosed = false
+	// Snapshot under the lock: Run's drainIngressLoops nils c.ownerQ under
+	// the same lock while this loop is still replaying, and reading the
+	// field unsynchronized in the select below races it.
+	newOwnerQ := c.ownerQ
 	c.ownerQMu.Unlock()
 	if oldOwnerQ != nil {
 		close(oldOwnerQ)
 		for env := range oldOwnerQ {
 			select {
-			case c.ownerQ <- env:
+			case newOwnerQ <- env:
 			default:
 			}
 		}
 	}
 
 	// Step 2 – systemQ: drain old → new, start systemLoop.
-	oldSysQ := c.systemQ
 	c.systemQMu.Lock()
+	oldSysQ := c.systemQ
 	c.systemQ = make(chan mailbox.Envelope, 64)
 	c.systemQClosed = false
+	newSysQ := c.systemQ
 	c.systemQMu.Unlock()
 	if oldSysQ != nil {
 		close(oldSysQ)
 		for env := range oldSysQ {
 			select {
-			case c.systemQ <- env:
+			case newSysQ <- env:
 			default:
 			}
 		}
@@ -59,16 +64,17 @@ func (c *Cell) openIngressLoops() {
 	go c.systemLoop()
 
 	// Step 3 – replyQ: drain old → new, start replyLoop.
-	oldReplyQ := c.replyQ
 	c.replyQMu.Lock()
+	oldReplyQ := c.replyQ
 	c.replyQ = make(chan mailbox.Envelope, 64)
 	c.replyQClosed = false
+	newReplyQ := c.replyQ
 	c.replyQMu.Unlock()
 	if oldReplyQ != nil {
 		close(oldReplyQ)
 		for env := range oldReplyQ {
 			select {
-			case c.replyQ <- env:
+			case newReplyQ <- env:
 			default:
 			}
 		}

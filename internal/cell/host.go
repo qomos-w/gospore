@@ -14,7 +14,7 @@ import (
 // implementation supplies exactly the groups it supports and every
 // missing group falls back to the documented default behavior
 // (see host_fallbacks_test.go for the pinned contract).
-type Host interface{}
+type Host = any
 
 // ServiceHost exposes the global and scoped service directory. The
 // owner/caller arguments carry the acting cell's identity — this is

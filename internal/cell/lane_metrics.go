@@ -216,9 +216,20 @@ func (c *Cell) laneSnapshots() []LaneRuntimeStats {
 	add := func(name string, depth, capc int) {
 		lanes = append(lanes, c.laneMetricsFor(name).snapshot(name, depth, capc))
 	}
+	// len()/cap() of a channel field must be read under that lane's queue
+	// lock: Run's drainIngressLoops and handleRestart's openIngressLoops
+	// swap/nil these fields concurrently with stats snapshots (a stats
+	// call from the supervisor's Decide runs on the system lane while the
+	// spawn goroutine's Run drains on shutdown).
+	c.ownerQMu.Lock()
 	add(laneNameOwner, len(c.ownerQ), cap(c.ownerQ))
+	c.ownerQMu.Unlock()
+	c.systemQMu.Lock()
 	add(laneNameSystem, len(c.systemQ), cap(c.systemQ))
+	c.systemQMu.Unlock()
+	c.replyQMu.Lock()
 	add(laneNameReply, len(c.replyQ), cap(c.replyQ))
+	c.replyQMu.Unlock()
 
 	c.loopsMu.Lock()
 	custom := make([]string, 0, len(c.loops))

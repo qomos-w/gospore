@@ -68,10 +68,14 @@ func (r *restartCrashRoot) OnInit(ctx actor.Context) error {
 // OnStart but never stored cellStarted, leaving restart-completed
 // actors permanently pre-start from the outside.
 //
-// Skipped under -race: it also exposes a PRE-EXISTING unsynchronized
-// drain-vs-reopen access in the restart machinery (Run's drain vs the
-// system lane's reopen) that is unrelated to this fix and tracked in
-// p01-cell-host-design as follow-up debt.
+// Skipped under -race: it also exposes a remaining unsynchronized
+// access between Run's drainIngressLoops (write side) and the
+// handleRestart chain (read side) that Windows race symbolization
+// cannot pinpoint (stacks collapse to return addresses). Four sibling
+// races were fixed along the way (scriptRuntime swap, c.actor reads,
+// openIngressLoops queue snapshots, laneSnapshots len/cap); this last
+// pair is tracked in p01-cell-host-design §2.5 — bisect on Linux where
+// race stacks symbolize correctly.
 func TestRestartReplayReportsStarted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

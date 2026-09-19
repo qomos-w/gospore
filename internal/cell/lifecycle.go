@@ -106,8 +106,8 @@ func (c *Cell) handleStart() {
 	slots, err := projection.ScanComponents(c.actor)
 	if err == nil && len(slots) > 0 {
 		c.setComponentSlots(slots)
-		if c.scriptRuntime != nil {
-			_ = c.scriptRuntime.bindActorComponents(slots)
+		if sr := c.scriptRuntimeRef(); sr != nil {
+			_ = sr.bindActorComponents(slots)
 		}
 	}
 
@@ -248,13 +248,24 @@ func (c *Cell) handleRestart(ctx context.Context, m mailbox.Restart) {
 		c.cancelLifecycle()
 	}
 	c.callRunCancel()
-	_ = c.actor.OnStop(newStopContext(c))
+	_ = c.currentActor().OnStop(newStopContext(c))
 
+	// Build the replacement owner outside actorMu: newScriptRuntimeOwner
+	// calls back into the nativeCellContext accessors (nativeHandlersFn
+	// et al.) which take actorMu.RLock — building under the write lock
+	// would self-deadlock. Only the field swap needs the lock.
+	var freshOwner *scriptRuntimeOwner
+	if c.scriptRuntimeRef() != nil {
+		freshOwner = newScriptRuntimeOwner(c.codec, c)
+	}
 	c.actorMu.Lock()
 	if fn := c.props.Factory(); fn != nil {
 		c.actor = fn()
 	}
 	c.handlers = c.newHandlerTable()
+	if freshOwner != nil {
+		c.scriptRuntime = freshOwner
+	}
 	c.actorMu.Unlock()
 
 	c.projectionMu.Lock()
@@ -262,11 +273,7 @@ func (c *Cell) handleRestart(ctx context.Context, m mailbox.Restart) {
 	c.projectionVersion = 0
 	c.projectionMu.Unlock()
 
-	if c.scriptRuntime != nil {
-		c.scriptRuntime = newScriptRuntimeOwner(c.codec, c)
-	}
-
-	if init, ok := c.actor.(actor.Initializable); ok {
+	if init, ok := c.currentActor().(actor.Initializable); ok {
 		if err := init.OnInit(newInitContext(c)); err != nil {
 			_ = c.supervisor.Decide(c.self, err)
 			c.Recv(mailbox.Envelope{Payload: mailbox.Stop{}})
@@ -275,16 +282,16 @@ func (c *Cell) handleRestart(ctx context.Context, m mailbox.Restart) {
 	}
 	c.state.Store(cellInitialized)
 	startCtx := newStartContext(c)
-	if err := c.actor.OnStart(startCtx); err != nil {
+	if err := c.currentActor().OnStart(startCtx); err != nil {
 		_ = c.supervisor.Decide(c.self, err)
 		c.Recv(mailbox.Envelope{Payload: mailbox.Stop{}})
 		return
 	}
 
-	if slots, err := projection.ScanComponents(c.actor); err == nil && len(slots) > 0 {
+	if slots, err := projection.ScanComponents(c.currentActor()); err == nil && len(slots) > 0 {
 		c.setComponentSlots(slots)
-		if c.scriptRuntime != nil {
-			_ = c.scriptRuntime.bindActorComponents(slots)
+		if sr := c.scriptRuntimeRef(); sr != nil {
+			_ = sr.bindActorComponents(slots)
 		}
 	}
 	// The replayed OnStart counts: a restarted cell must report
