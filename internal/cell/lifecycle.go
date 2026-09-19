@@ -78,9 +78,7 @@ func (c *Cell) handleInit() {
 	}
 
 	c.state.Store(cellInitialized)
-	if c.onInitCompleted != nil {
-		c.onInitCompleted()
-	}
+	c.notifyInitOutcome()
 }
 
 func (c *Cell) handleStart() {
@@ -116,9 +114,6 @@ func (c *Cell) handleStart() {
 	c.emitLifecycleEvent(actor.WatchStarted)
 	c.state.Store(cellStarted)
 	c.notifyStartOutcome()
-	if c.onStartCompleted != nil {
-		c.onStartCompleted()
-	}
 
 	// Start the owner loop only after OnStart has fully reconstructed state.
 	// Messages enqueued during OnStart wait in ownerQ until now, so stateful
@@ -259,11 +254,12 @@ func (c *Cell) handleRestart(ctx context.Context, m mailbox.Restart) {
 	c.callRunCancel()
 	_ = c.actor.OnStop(newStopContext(c))
 
+	c.actorMu.Lock()
 	if fn := c.props.Factory(); fn != nil {
 		c.actor = fn()
 	}
-
 	c.handlers = c.newHandlerTable()
+	c.actorMu.Unlock()
 
 	c.projectionMu.Lock()
 	c.projectionState = nil
@@ -295,6 +291,12 @@ func (c *Cell) handleRestart(ctx context.Context, m mailbox.Restart) {
 			_ = c.scriptRuntime.bindActorComponents(slots)
 		}
 	}
+	// The replayed OnStart counts: a restarted cell must report
+	// IsStarted() and close StartDone for any spawn-side waiter —
+	// previously the replay skipped both, leaving restart-completed
+	// actors stuck in the pre-start state forever.
+	c.state.Store(cellStarted)
+	c.notifyStartOutcome()
 
 	// Reopen the ingress pipeline. Run() exits after its drain (runCancel
 	// above), and every queue was closed by that drain — without reopening,

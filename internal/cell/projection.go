@@ -41,10 +41,11 @@ func (c *Cell) applyProjectionIfObserved() (version uint64, changed bool, err er
 	}
 	var next projection.FieldSnapshot
 	slots := c.ComponentSlots()
+	actor := c.currentActor()
 	if len(slots) > 0 {
-		next, err = projection.SnapshotOfSlots(c.actor, slots)
+		next, err = projection.SnapshotOfSlots(actor, slots)
 	} else {
-		next, err = projection.SnapshotOf(c.actor)
+		next, err = projection.SnapshotOf(actor)
 	}
 	if err != nil {
 		return c.projectionVersion, false, err

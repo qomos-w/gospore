@@ -16,7 +16,6 @@ import (
 	"github.com/qomos-w/gospore/id"
 	"github.com/qomos-w/gospore/invoke"
 	"github.com/qomos-w/gospore/mailbox"
-	"github.com/qomos-w/gospore/message"
 	"github.com/qomos-w/gospore/projection"
 	"github.com/qomos-w/gospore/ref"
 	"github.com/qomos-w/gospore/resource"
@@ -57,13 +56,17 @@ type loopLane struct {
 // Construction via New(Config). The caller starts the goroutine; the Cell
 // runs until ctx is cancelled.
 type Cell struct {
-	self           ref.Ref
-	parent         ref.Ref
-	actor          actor.Actor
-	props          actor.Props
-	role           string // default caller role (from Props.Role)
-	supervisor     supervisor.Supervisor
-	handlers       *handler.Table
+	self       ref.Ref
+	parent     ref.Ref
+	actor      actor.Actor
+	props      actor.Props
+	role       string // default caller role (from Props.Role)
+	supervisor supervisor.Supervisor
+	handlers   *handler.Table
+	// actorMu guards actor+handlers against handleRestart's instance
+	// swap: external goroutines (app deliver/lookup, script runtime)
+	// read these while the system lane replaces them.
+	actorMu        sync.RWMutex
 	strictHandlers bool
 	children       *childSet
 	watchers       *watcherSet
@@ -101,7 +104,6 @@ type Cell struct {
 	policyStore               actor.PolicyStore
 	deliver                   func(ref.Ref, mailbox.Envelope) error
 	shutdown                  func(reason error)
-	routeReply                func(message.Frame) bool
 	projectionVersion         uint64
 	projectionState           projection.FieldSnapshot
 	projectionMu              sync.Mutex                 // serializes applyProjectionIfObserved across owner/system/pure lanes
@@ -118,18 +120,21 @@ type Cell struct {
 	// runCancel cancels Cell.Run's ctx so it exits during Destroy.
 	// Written by the Run goroutine, read by the system lane (handleIdle /
 	// handleDestroy) — guard with cancelMu.
-	runCancel        context.CancelFunc
-	cancelMu         sync.Mutex
-	spawn            func(parent ref.Ref, props actor.Props, name string) (ref.Ref, error)
-	plannerInvoke    func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call
-	stop             func(target ref.Ref) error
-	destroy          func(target ref.Ref) error
-	lookupID         func(id.ActorID) (ref.Ref, bool)
-	invokeTable      *invoke.PendingTable
-	corIDGen         *id.CorIDGenerator
-	idGen            *id.Canonical
-	onStartCompleted func()
-	onInitCompleted  func()
+	runCancel     context.CancelFunc
+	cancelMu      sync.Mutex
+	spawn         func(parent ref.Ref, props actor.Props, name string) (ref.Ref, error)
+	plannerInvoke func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call
+	stop          func(target ref.Ref) error
+	destroy       func(target ref.Ref) error
+	lookupID      func(id.ActorID) (ref.Ref, bool)
+	invokeTable   *invoke.PendingTable
+	corIDGen      *id.CorIDGenerator
+	idGen         *id.Canonical
+	// initCh/startCh close on the first terminal init/start outcome
+	// (see InitDone/StartDone). They replace the former
+	// OnInitCompleted/OnStartCompleted config callbacks.
+	initCh   chan struct{}
+	initOnce sync.Once
 
 	replyReg *replyRegistry
 	logger   actor.Logger
@@ -229,11 +234,6 @@ type Config struct {
 	// notification that its own supervisor escalates. Optional; when nil,
 	// root escalation is silently observed.
 	Shutdown func(reason error)
-	// RouteReply routes a response frame (Reply/Error/End) to the
-	// waiting invoke.Stream on the caller side. Optional; when nil,
-	// response frames are silently dropped. The App layer wires this
-	// to invoke.PendingTable.Deliver.
-	RouteReply func(frame message.Frame) bool
 	// Events is the events store for lifecycle and callable event emission.
 	// Optional; when nil, no events are emitted. When non-nil, the Cell
 	// checks HasSubscribers before Record creation.
@@ -293,12 +293,6 @@ type Config struct {
 	// handlers as ctx.NewID. Optional; when nil, ctx.NewID panics. App
 	// always wires this; only narrow test fixtures may leave it nil.
 	IDGen *id.Canonical
-	// OnStartCompleted is called after the actor's OnStart succeeds and
-	// WatchStarted has been emitted. Optional.
-	OnStartCompleted func()
-	// OnInitCompleted is called after the actor's OnInit succeeds.
-	// Optional.
-	OnInitCompleted func()
 	// EventBus is the App-scoped user-event broadcast bus. Optional;
 	// when nil, ctx.EmitEvent returns DiagEventNoBus.
 	EventBus *EventBus
@@ -368,7 +362,6 @@ func New(cfg Config) *Cell {
 		policyStore:               cfg.PolicyStore,
 		deliver:                   cfg.Deliver,
 		shutdown:                  cfg.Shutdown,
-		routeReply:                cfg.RouteReply,
 		spawn:                     cfg.Spawn,
 		plannerInvoke:             cfg.PlannerInvoke,
 		stop:                      cfg.Stop,
@@ -377,9 +370,8 @@ func New(cfg Config) *Cell {
 		invokeTable:               cfg.InvokeTable,
 		corIDGen:                  cfg.CorIDGen,
 		idGen:                     cfg.IDGen,
-		onStartCompleted:          cfg.OnStartCompleted,
-		onInitCompleted:           cfg.OnInitCompleted,
-		replyReg:                  newReplyRegistry(cfg.RouteReply),
+		initCh:                    make(chan struct{}),
+		replyReg:                  newReplyRegistry(cfg.InvokeTable),
 		loops:                     make(map[string]*loopLane),
 		laneStats:                 make(map[string]*laneMetrics),
 		eventMeta:                 make(map[string]eventMetaEntry),
@@ -415,6 +407,18 @@ func (c *Cell) StartDone() <-chan struct{} {
 
 func (c *Cell) notifyStartOutcome() {
 	c.startOnce.Do(func() { close(c.startCh) })
+}
+
+// InitDone returns a channel that closes when the actor's OnInit
+// completes successfully. A failed OnInit deliberately does not close
+// it — the cell's Done channel is the failure signal, mirroring the
+// former OnInitCompleted callback's firing contract.
+func (c *Cell) InitDone() <-chan struct{} {
+	return c.initCh
+}
+
+func (c *Cell) notifyInitOutcome() {
+	c.initOnce.Do(func() { close(c.initCh) })
 }
 
 // IsStarted reports whether the Cell has completed OnStart.
@@ -518,11 +522,29 @@ func (c *Cell) Self() ref.Ref {
 
 // Actor returns the user-defined handler instance.
 func (c *Cell) Actor() actor.Actor {
+	c.actorMu.RLock()
+	defer c.actorMu.RUnlock()
+	return c.actor
+}
+
+// currentActor snapshots the handler instance for cross-goroutine use
+// (restart may swap it concurrently).
+func (c *Cell) currentActor() actor.Actor {
+	c.actorMu.RLock()
+	defer c.actorMu.RUnlock()
 	return c.actor
 }
 
 // Handlers returns the cell's callable table.
 func (c *Cell) Handlers() *handler.Table {
+	c.actorMu.RLock()
+	defer c.actorMu.RUnlock()
+	return c.handlers
+}
+
+func (c *Cell) nativeHandlersFn() *handler.Table {
+	c.actorMu.RLock()
+	defer c.actorMu.RUnlock()
 	return c.handlers
 }
 
@@ -721,8 +743,4 @@ func (c *Cell) nativePolicyStore() actor.PolicyStore {
 
 func (c *Cell) nativeProjectionsFn() *projection.StoreImpl {
 	return c.projections
-}
-
-func (c *Cell) nativeHandlersFn() *handler.Table {
-	return c.handlers
 }

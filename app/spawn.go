@@ -76,8 +76,6 @@ func (a *appImpl) buildSpawn(parent ref.Ref, props actor.Props, name string, res
 	}
 
 	// Create child Cell.
-	childInitialized := make(chan struct{})
-	childStarted := make(chan struct{})
 	var childHandlers *handler.Table
 	if a.cfg.strictHandlers {
 		childHandlers = handler.NewStrictTableWithSchema(a.schemas)
@@ -102,7 +100,6 @@ func (a *appImpl) buildSpawn(parent ref.Ref, props actor.Props, name string, res
 		Handlers:        childHandlers,
 		StrictHandlers:  a.cfg.strictHandlers,
 		Deliver:         a.deliver,
-		RouteReply:      childPT.Deliver,
 		Events:          a.eventsStore,
 		Projections:     a.projStore,
 		PolicyStore:     a.policyStore,
@@ -131,12 +128,11 @@ func (a *appImpl) buildSpawn(parent ref.Ref, props actor.Props, name string, res
 		InvokeTable:               childPT,
 		CorIDGen:                  a.corIDGen,
 		IDGen:                     a.gen,
-		OnInitCompleted:           func() { close(childInitialized) },
-		OnStartCompleted:          func() { close(childStarted) },
 		EventBus:                  a.eventBus,
 		Logger:                    a.cfg.logger,
 		LogHook:                   a.cfg.logHook,
 	})
+	childInitialized := childCell.InitDone()
 
 	aid := childRef.ID()
 	a.cellMu.Lock()

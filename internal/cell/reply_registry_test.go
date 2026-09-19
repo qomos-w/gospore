@@ -4,34 +4,40 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/qomos-w/gospore/invoke"
 	"github.com/qomos-w/gospore/message"
 )
 
 // TestReplyRegistry_DeliverRoutesFrame verifies that deliver forwards
-// frames through the routeReply hook and returns the hook's result.
+// frames into the cell's pending table: a stream registered for the
+// frame's CorID receives it.
 func TestReplyRegistry_DeliverRoutesFrame(t *testing.T) {
-	var got message.Frame
-	rr := newReplyRegistry(func(f message.Frame) bool {
-		got = f
-		return true
-	})
+	pt := invoke.NewPendingTable()
+	rr := newReplyRegistry(pt)
+	ch := make(chan message.Frame, 1)
+	pt.Register(42, "", "", ch)
 
 	frame := message.Frame{Kind: message.KindReply, CorID: 42, Body: []byte("hi")}
 	if !rr.deliver(frame) {
 		t.Fatal("deliver returned false, want true")
 	}
-	if got.CorID != 42 {
-		t.Fatalf("CorID = %d, want 42", got.CorID)
+	select {
+	case got := <-ch:
+		if got.CorID != 42 {
+			t.Fatalf("CorID = %d, want 42", got.CorID)
+		}
+	default:
+		t.Fatal("frame not delivered to registered stream")
 	}
 }
 
-// TestReplyRegistry_DeliverWithoutHookReturnsFalse verifies that when
-// no routeReply hook is wired, deliver returns false silently.
-func TestReplyRegistry_DeliverWithoutHookReturnsFalse(t *testing.T) {
+// TestReplyRegistry_DeliverWithoutTableReturnsFalse verifies that when
+// no pending table is wired, deliver returns false silently.
+func TestReplyRegistry_DeliverWithoutTableReturnsFalse(t *testing.T) {
 	rr := newReplyRegistry(nil)
 	frame := message.Frame{Kind: message.KindReply, CorID: 1}
 	if rr.deliver(frame) {
-		t.Fatal("deliver returned true without hook, want false")
+		t.Fatal("deliver returned true without pending table, want false")
 	}
 }
 
@@ -118,7 +124,7 @@ func TestReplyRegistry_Clear(t *testing.T) {
 // TestReplyRegistry_DeliverConcurrentWithCancel verifies that deliver
 // and cancel can race without deadlock or data races.
 func TestReplyRegistry_DeliverConcurrentWithCancel(t *testing.T) {
-	rr := newReplyRegistry(func(f message.Frame) bool { return true })
+	rr := newReplyRegistry(nil)
 
 	var fired atomic.Int32
 	for i := uint64(0); i < 100; i++ {

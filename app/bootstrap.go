@@ -35,8 +35,6 @@ func (a *appImpl) Run(ctx context.Context) error {
 	}
 
 	// Step 2: Create and register the root Cell.
-	rootInitialized := make(chan struct{})
-	rootStarted := make(chan struct{})
 	rootCell := cell.New(cell.Config{
 		Self:       a.rootRef,
 		Actor:      a.rootActor(),
@@ -47,7 +45,6 @@ func (a *appImpl) Run(ctx context.Context) error {
 		Shutdown: func(reason error) {
 			cancel()
 		},
-		RouteReply:                a.pending.Deliver,
 		Events:                    a.eventsStore,
 		Projections:               a.projStore,
 		PolicyStore:               a.policyStore,
@@ -69,19 +66,17 @@ func (a *appImpl) Run(ctx context.Context) error {
 		PlannerInvoke: func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call {
 			return a.invokeAs(a.rootRef, target, callID, payload, headers...)
 		},
-		Clock:            a.cfg.clock,
-		Spawn:            a.tree.Spawn,
-		Stop:             a.tree.Stop,
-		Destroy:          a.tree.Destroy,
-		LookupID:         a.tree.LookupID,
-		InvokeTable:      a.pending,
-		CorIDGen:         a.corIDGen,
-		IDGen:            a.gen,
-		OnInitCompleted:  func() { close(rootInitialized) },
-		OnStartCompleted: func() { close(rootStarted) },
-		EventBus:         a.eventBus,
-		Logger:           a.cfg.logger,
-		LogHook:          a.cfg.logHook,
+		Clock:       a.cfg.clock,
+		Spawn:       a.tree.Spawn,
+		Stop:        a.tree.Stop,
+		Destroy:     a.tree.Destroy,
+		LookupID:    a.tree.LookupID,
+		InvokeTable: a.pending,
+		CorIDGen:    a.corIDGen,
+		IDGen:       a.gen,
+		EventBus:    a.eventBus,
+		Logger:      a.cfg.logger,
+		LogHook:     a.cfg.logHook,
 	})
 
 	a.cellMu.Lock()
@@ -100,6 +95,7 @@ func (a *appImpl) Run(ctx context.Context) error {
 	}
 
 	// Phase 1: Init. Push Init to root, which recursively inits all children.
+	rootInitialized := rootCell.InitDone()
 	_ = rootCell.Recv(mailbox.Envelope{Payload: mailbox.Init{}})
 	select {
 	case <-rootInitialized:

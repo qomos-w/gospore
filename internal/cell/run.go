@@ -144,13 +144,14 @@ func (c *Cell) enqueueSystem(env mailbox.Envelope) (err error) {
 }
 
 func (c *Cell) handleCall(env mailbox.Envelope) error {
-	if c.handlers == nil {
+	handlers := c.Handlers()
+	if handlers == nil {
 		reply := c.makeReply(env)
 		reply(message.Frame{Kind: message.KindError, Body: []byte("gospore.cell: handler table not initialized")})
 		reply(message.Frame{Kind: message.KindEnd})
 		return nil
 	}
-	inv, ok := c.handlers.Lookup(env.Frame.CallID)
+	inv, ok := handlers.Lookup(env.Frame.CallID)
 	if !ok {
 		reply := c.makeReply(env)
 		reply(message.Frame{Kind: message.KindError, Body: []byte(fmt.Sprintf("gospore.cell: call ID %q not registered", env.Frame.CallID))})
@@ -266,6 +267,14 @@ func (c *Cell) enqueueReply(env mailbox.Envelope) (err error) {
 	c.replyQMu.Lock()
 	defer c.replyQMu.Unlock()
 	if c.replyQ == nil || c.replyQClosed {
+		// Between drain and reopen (restart/idle): delivering to the
+		// pending table directly settles the caller's promise — the
+		// queue's consumer would do exactly this, and dropping the
+		// frame instead wedges the caller until its timeout.
+		if c.replyReg != nil {
+			c.replyReg.deliver(env.Frame)
+			return nil
+		}
 		return fmt.Errorf("cell: reply queue not ready (corID=%d)", env.Frame.CorID)
 	}
 	q := c.replyQ

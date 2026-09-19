@@ -55,13 +55,13 @@ func (c *Cell) dispatchCall(env mailbox.Envelope, reply func(message.Frame)) {
 		return
 	}
 
-	if c.handlers == nil {
+	if h := c.Handlers(); h == nil {
 		c.logger.Error("cell: dispatchCall NO_HANDLERS", "callID", env.Frame.CallID)
 		reply(message.Frame{Kind: message.KindError, Body: []byte("gospore.cell: handler table not initialized")})
 		reply(message.Frame{Kind: message.KindEnd})
 		return
 	}
-	inv, ok := c.handlers.Lookup(env.Frame.CallID)
+	inv, ok := c.Handlers().Lookup(env.Frame.CallID)
 	if !ok {
 		c.logger.Error("cell: dispatchCall NOT_FOUND", "callID", env.Frame.CallID)
 		reply(message.Frame{Kind: message.KindError, Body: []byte(fmt.Sprintf("gospore.cell: call ID %q not registered", env.Frame.CallID))})
@@ -172,12 +172,12 @@ func (c *Cell) selfLoopOverride(env mailbox.Envelope) (string, bool) {
 
 func (c *Cell) invokeLoop(name string, env mailbox.Envelope) {
 	reply := c.makeReply(env)
-	if c.handlers == nil {
+	if h := c.Handlers(); h == nil {
 		reply(message.Frame{Kind: message.KindError, Body: []byte("gospore.cell: handler table not initialized")})
 		reply(message.Frame{Kind: message.KindEnd})
 		return
 	}
-	inv, ok := c.handlers.Lookup(env.Frame.CallID)
+	inv, ok := c.Handlers().Lookup(env.Frame.CallID)
 	if !ok {
 		reply(message.Frame{Kind: message.KindError, Body: []byte(fmt.Sprintf("gospore.cell: call ID %q not registered", env.Frame.CallID))})
 		reply(message.Frame{Kind: message.KindEnd})
@@ -223,7 +223,7 @@ func (c *Cell) invokeCall(inv *handler.Invoker, env mailbox.Envelope, reply func
 			Frame:          env.Frame,
 			Caller:         env.Sender,
 			Payload:        payload,
-			Actor:          c.actor,
+			Actor:          c.currentActor(),
 			Reply:          reply,
 			Codec:          c.codec,
 			ReturnSchemaID: inv.ReturnSchemaID,
@@ -260,7 +260,7 @@ func (c *Cell) handleControlCallReply(env mailbox.Envelope, reply func(message.F
 		Frame:    env.Frame,
 		Caller:   env.Sender,
 		Payload:  env.Frame.Body,
-		Actor:    c.actor,
+		Actor:    c.currentActor(),
 		Reply:    reply,
 		Codec:    c.codec,
 		Identity: identityFromHeaders(env.Frame.Headers),
