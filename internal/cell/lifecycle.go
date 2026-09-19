@@ -173,6 +173,14 @@ func (c *Cell) handleDestroy() {
 	if c.state.Load() >= cellStopped {
 		return
 	}
+	c.destroyCore()
+}
+
+// destroyCore performs the terminal cleanup. Called from handleDestroy
+// (message path) and ForceCleanup (app-side forced cleanup after
+// terminate timeout). Requires the caller to have passed the
+// cellStopped idempotency gate.
+func (c *Cell) destroyCore() {
 	c.emitLifecycleEvent(actor.WatchTerminated)
 	c.state.Store(cellStopped)
 	c.notifyStartOutcome()
@@ -188,11 +196,60 @@ func (c *Cell) handleDestroy() {
 	c.clearServices()
 	c.notifyWatchers()
 	if onDestroy, ok := c.actor.(actor.Destroyable); ok {
-		_ = onDestroy.OnDestroy(newStopContext(c))
+		// Same once-guard as safeOnStop: ForceCleanup may race the
+		// message path's handleDestroy; OnDestroy must fire exactly once.
+		if c.onDestroyDone.CompareAndSwap(false, true) {
+			_ = onDestroy.OnDestroy(newStopContext(c))
+		}
 	}
 }
 
+// ForceCleanup runs the actor's terminal cleanup synchronously from the
+// app goroutine when the normal message path cannot make progress —
+// terminate's Done() wait timed out, which means systemLoop is wedged
+// (typically blocked in a slow OnInit) while Run's drain already closed
+// the queues, so the queued Stop/Destroy will never be processed and
+// OnStop/OnDestroy (and any resources they close) would leak.
+//
+// It is non-blocking (never waits on lane goroutines), idempotent (safe
+// to call repeatedly and concurrently with the message path), and may
+// invoke OnStop/OnDestroy while OnInit is still running — the actor sees
+// a half-initialized state, which is the documented trade-off versus
+// leaking handles opened before registration completed.
+func (c *Cell) ForceCleanup() {
+	if c.state.Load() >= cellIdle {
+		// Idle already reached via the message path; only the destroy
+		// core remains.
+		if c.state.Load() >= cellStopped {
+			return
+		}
+		c.destroyCore()
+		return
+	}
+	// Mirror handleIdle's draining branch (the only reachable state when
+	// terminate times out: Run cancelled ctx and is draining) without
+	// touching the queues.
+	c.emitLifecycleEvent(actor.WatchStopped)
+	c.state.Store(cellIdle)
+	if c.cancelLifecycle != nil {
+		c.cancelLifecycle()
+	}
+	c.callRunCancel()
+	if c.replyReg != nil {
+		c.replyReg.clear()
+	}
+	c.safeOnStop()
+	c.destroyCore()
+}
+
 func (c *Cell) safeOnStop() {
+	// Idempotency across the normal message path (handleIdle via
+	// systemLoop) and ForceCleanup (terminate timeout, called from the
+	// app goroutine while systemLoop may still be wedged in OnInit):
+	// OnStop must run at most once, whichever side wins the race.
+	if !c.onStopDone.CompareAndSwap(false, true) {
+		return
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			_ = c.supervisor.Decide(c.self, fmt.Errorf("actor panic in OnStop: %v", r))

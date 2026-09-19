@@ -225,6 +225,13 @@ func (a *appImpl) terminate(r ref.Ref) error {
 		select {
 		case <-childCell.Done():
 		case <-time.After(a.cfg.terminateTimeout):
+			// Graceful path is wedged (systemLoop blocked — typically a
+			// slow OnInit) while Run's drain already closed the queues, so
+			// the queued Stop/Destroy will never be processed. Force the
+			// terminal callbacks so resources opened during OnInit are
+			// closed instead of leaking; ForceCleanup is idempotent and
+			// races the message path safely (exactly-once callbacks).
+			childCell.ForceCleanup()
 		}
 	}
 

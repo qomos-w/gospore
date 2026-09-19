@@ -76,7 +76,12 @@ type Cell struct {
 	pureWG         sync.WaitGroup
 	state          atomic.Int32
 	draining       atomic.Bool
-	done           chan struct{}
+	// onStopDone/onDestroyDone make the terminal actor callbacks
+	// exactly-once across the message path (handleIdle/handleDestroy on
+	// systemLoop) and ForceCleanup (app goroutine, terminate timeout).
+	onStopDone    atomic.Bool
+	onDestroyDone atomic.Bool
+	done          chan struct{}
 	// startCh closes once the cell reaches its first terminal start
 	// outcome (OnStart completed, or the cell was destroyed first).
 	// app.waitForCellStart blocks on it instead of polling IsStarted.
