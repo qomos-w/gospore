@@ -56,10 +56,22 @@ type StreamChunk struct {
 	Err  string `json:"err"`
 }
 
+// InvokeResult is the bridge contract for a unary invoke from Spore scripts.
+// The error travels as a value field, not a Go error return: spore host
+// interface methods cannot return Go errors (the dispatch panics them
+// straight through the VM, uncatchable by script try/catch), so failures
+// must ride the same value channel StreamChunk uses for streams.
+type InvokeResult struct {
+	Value any    `json:"value"`
+	Err   string `json:"err"`
+}
+
 // ActorRef is the host-backed interface for a remote actor reference.
 // Scripts obtain an ActorRef via ctx.lookup_id(id) or ctx.lookup_service(name) and call methods on it.
+// Invoke failures are reported through InvokeResult.Err, never as nil-only
+// silence.
 type ActorRef interface {
-	Invoke(callID string, payload any) any
+	Invoke(callID string, payload any) InvokeResult
 	InvokeStream(callID string, payload any) Stream
 }
 
@@ -98,10 +110,12 @@ type scriptContextAdapter struct {
 	owner *scriptRuntimeOwner
 }
 
-// actorRefAdapter implements ActorRef for a specific target actor.
+// actorRefAdapter implements ActorRef for a specific target actor. A nil
+// targetRef with a non-empty deadReason marks a lookup-miss "dead ref".
 type actorRefAdapter struct {
-	owner     *scriptRuntimeOwner
-	targetRef ref.Ref
+	owner      *scriptRuntimeOwner
+	targetRef  ref.Ref
+	deadReason string
 }
 
 // streamAdapter implements Stream for a specific invoke.Stream.
@@ -269,6 +283,9 @@ func (o *scriptRuntimeOwner) bindNativeCapabilities() error {
 	if err := o.spore.BindStruct("gospore", "StreamChunk", StreamChunk{}); err != nil {
 		return fmt.Errorf("bind StreamChunk: %w", err)
 	}
+	if err := o.spore.BindStruct("gospore", "InvokeResult", InvokeResult{}); err != nil {
+		return fmt.Errorf("bind InvokeResult: %w", err)
+	}
 	if err := o.spore.BindStruct("gospore", "PolicyCheckResult", actor.PolicyCheckResult{}); err != nil {
 		return fmt.Errorf("bind PolicyCheckResult: %w", err)
 	}
@@ -280,7 +297,7 @@ func (o *scriptRuntimeOwner) bindNativeCapabilities() error {
 					{Name: "call_id", Type: schema.TypeDesc{Kind: schema.TypeKindScalar, Name: "string"}},
 					{Name: "payload", Type: schema.TypeDesc{Kind: schema.TypeKindScalar, Name: "any"}},
 				},
-				Returns: []schema.TypeDesc{{Kind: schema.TypeKindScalar, Name: "any"}},
+				Returns: []schema.TypeDesc{{Kind: schema.TypeKindStruct, Name: "InvokeResult"}},
 			},
 			{
 				Name: "invoke_stream",
@@ -519,17 +536,30 @@ func (a *scriptContextAdapter) Now() string {
 }
 
 
+// deadRef returns a non-nil ActorRef whose invokes always fail with an
+// error. Host code must never return a nil ActorRef to scripts: calling a
+// method on a nil host object panics the VM process ("invalid object
+// handle"), so lookup misses get a dead ref that reports the failure
+// through InvokeResult.Err instead.
+func (a *scriptContextAdapter) deadRef(reason string) ActorRef {
+	adapter := &actorRefAdapter{owner: a.owner, deadReason: reason}
+	if a.owner.spore != nil {
+		_ = a.owner.spore.RegisterHostInterfaceInstance("gospore", "ActorRef", adapter)
+	}
+	return adapter
+}
+
 func (a *scriptContextAdapter) LookupID(idStr string) ActorRef {
 	if a.owner.lookupID == nil {
-		return nil
+		return a.deadRef("lookup_id unavailable in this host")
 	}
 	cid, err := identity.ParseCanonicalID(idStr)
 	if err != nil {
-		return nil
+		return a.deadRef(fmt.Sprintf("parse actor id %q: %v", idStr, err))
 	}
 	r, ok := a.owner.lookupID(id.From(cid))
 	if !ok {
-		return nil
+		return a.deadRef(fmt.Sprintf("actor %s not found", idStr))
 	}
 	adapter := &actorRefAdapter{owner: a.owner, targetRef: r}
 	if a.owner.spore != nil {
@@ -540,11 +570,11 @@ func (a *scriptContextAdapter) LookupID(idStr string) ActorRef {
 
 func (a *scriptContextAdapter) LookupService(name string) ActorRef {
 	if a.owner.lookupService == nil {
-		return nil
+		return a.deadRef("lookup_service unavailable in this host")
 	}
 	r, ok := a.owner.lookupService(name)
 	if !ok {
-		return nil
+		return a.deadRef(fmt.Sprintf("service %q not found", name))
 	}
 	adapter := &actorRefAdapter{owner: a.owner, targetRef: r}
 	if a.owner.spore != nil {
@@ -752,13 +782,19 @@ func (a *scriptContextAdapter) PolicyVersion() uint64 {
 // ActorRef implementation
 // ---------------------------------------------------------------------------
 
-func (a *actorRefAdapter) Invoke(callID string, payload any) any {
+func (a *actorRefAdapter) Invoke(callID string, payload any) InvokeResult {
+	fail := func(err error) InvokeResult {
+		return InvokeResult{Err: fmt.Sprintf("script invoke %s: %v", callID, err)}
+	}
+	if a.deadReason != "" {
+		return InvokeResult{Err: fmt.Sprintf("script invoke %s: %s", callID, a.deadReason)}
+	}
 	if a.owner == nil || a.owner.invokeTable == nil || a.owner.corIDGen == nil || a.owner.deliver == nil || a.targetRef == nil {
-		return nil
+		return InvokeResult{Err: fmt.Sprintf("script invoke %s: actor host is not fully wired", callID)}
 	}
 	body, mode, encoding, schemaID, err := a.owner.encodePayload(callID, payload)
 	if err != nil {
-		return nil
+		return fail(fmt.Errorf("encode payload: %w", err))
 	}
 	stream, err := invoke.Invoke(
 		a.owner.self.ID(),
@@ -776,29 +812,42 @@ func (a *actorRefAdapter) Invoke(callID string, payload any) any {
 		a.owner.invokeTable,
 	)
 	if err != nil {
-		return nil
+		return fail(err)
 	}
 	defer stream.Close()
 	val, err := stream.Recv()
 	if err != nil {
-		return nil
+		return fail(err)
 	}
 	if b, ok := val.([]byte); ok {
 		if a.owner != nil && a.owner.codec != nil {
-			return string(b)
+			return InvokeResult{Value: string(b)}
 		}
 		var decoded any
 		if json.Unmarshal(b, &decoded) == nil {
-			return decoded
+			return InvokeResult{Value: decoded}
 		}
-		return string(b)
+		return InvokeResult{Value: string(b)}
 	}
-	return val
+	return InvokeResult{Value: val}
 }
 
+// DeadStream is the Stream returned by dead refs: every Recv reports the
+// lookup failure; Close is a no-op. Never return a nil Stream to scripts —
+// method calls on nil host objects panic the VM.
+type DeadStream struct {
+	Reason string
+}
+
+func (d DeadStream) Recv() StreamChunk { return StreamChunk{Err: d.Reason, Ok: true} }
+func (d DeadStream) Close() bool       { return true }
+
 func (a *actorRefAdapter) InvokeStream(callID string, payload any) Stream {
+	if a.deadReason != "" {
+		return DeadStream{Reason: a.deadReason}
+	}
 	if a.owner == nil || a.owner.invokeTable == nil || a.owner.corIDGen == nil || a.owner.deliver == nil || a.targetRef == nil {
-		return nil
+		return DeadStream{Reason: "actor host is not fully wired"}
 	}
 	body, mode, encoding, schemaID, err := a.owner.encodePayload(callID, payload)
 	if err != nil {

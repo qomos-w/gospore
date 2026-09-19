@@ -89,7 +89,8 @@ export fun before(ctx: Context, req: any): string {
 }
 
 // TestScriptInterceptor_Before_LookupService verifies the interceptor script
-// can lookup a service actor and invoke it.
+// can lookup a service actor and invoke it, and that a failed invoke is a
+// catchable script error (not a silent nil).
 func TestScriptInterceptor_Before_LookupService(t *testing.T) {
 	a, shutdown := newTestApp(t)
 	defer shutdown()
@@ -104,10 +105,11 @@ func TestScriptInterceptor_Before_LookupService(t *testing.T) {
 
 	src := `import Context from "gospore"
 import ActorRef from "gospore"
+import InvokeResult from "gospore"
 export fun before(ctx: Context, req: any): string {
 	var quota: ActorRef = ctx.lookup_service("quota")
-	var result: any = quota.invoke("check", {})
-	if (result == null) {
+	var result: InvokeResult = quota.invoke("check", {})
+	if (result.err != "") {
 		return "quota check failed"
 	}
 	return ""
@@ -120,11 +122,130 @@ export fun before(ctx: Context, req: any): string {
 	req := &gateway.GatewayRequest{CallID: "test.echo", CustomerID: "alice"}
 	if err := si.Before(context.Background(), req); err == nil {
 		t.Fatal("Before: expected quota check failure, got nil")
+	} else if !strings.Contains(err.Error(), "quota check failed") {
+		t.Fatalf("Before: unexpected error: %v", err)
+	}
+}
+
+// TestScriptInterceptor_InvokeSuccess verifies a successful actor invoke
+// returns its value to the script (non-nil), allowing the request through.
+func TestScriptInterceptor_InvokeSuccess(t *testing.T) {
+	a, shutdown := newTestApp(t)
+	defer shutdown()
+
+	_, err := a.Spawn(actor.PropsFromFunc(func() actor.Actor {
+		return &slowActor{delay: 0}
+	}), "slow")
+	if err != nil {
+		t.Fatalf("Spawn slow: %v", err)
 	}
 
-	// Verify the error path executed by checking the error message.
-	if err := si.Before(context.Background(), req); !strings.Contains(err.Error(), "quota check failed") {
-		t.Fatalf("Before: unexpected error: %v", err)
+	src := `import Context from "gospore"
+import ActorRef from "gospore"
+import InvokeResult from "gospore"
+export fun before(ctx: Context, req: any): string {
+	var svc: ActorRef = ctx.lookup_service("slow")
+	var result: InvokeResult = svc.invoke("test.slow", "ping")
+	if (result.err != "") {
+		return result.err
+	}
+	if (result.value == null) {
+		return "slow check returned null"
+	}
+	return ""
+}`
+	si, err := gateway.NewScriptInterceptor(a, src)
+	if err != nil {
+		t.Fatalf("NewScriptInterceptor: %v", err)
+	}
+
+	req := &gateway.GatewayRequest{CallID: "test.echo", CustomerID: "alice"}
+	if err := si.Before(context.Background(), req); err != nil {
+		t.Fatalf("Before: expected allow, got %v", err)
+	}
+}
+
+// TestScriptInterceptor_InvokeErrorPropagates verifies a failed invoke
+// reports its error through InvokeResult.err, which the script can turn
+// into a denial message.
+func TestScriptInterceptor_InvokeErrorPropagates(t *testing.T) {
+	a, shutdown := newTestApp(t)
+	defer shutdown()
+
+	src := `import Context from "gospore"
+import ActorRef from "gospore"
+import InvokeResult from "gospore"
+export fun before(ctx: Context, req: any): string {
+	var svc: ActorRef = ctx.lookup_service("does-not-exist")
+	var result: InvokeResult = svc.invoke("test.slow", "ping")
+	if (result.err != "") {
+		return result.err
+	}
+	return ""
+}`
+	si, err := gateway.NewScriptInterceptor(a, src)
+	if err != nil {
+		t.Fatalf("NewScriptInterceptor: %v", err)
+	}
+
+	req := &gateway.GatewayRequest{CallID: "test.echo", CustomerID: "alice"}
+	err = si.Before(context.Background(), req)
+	if err == nil {
+		t.Fatal("Before: expected invoke error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invoke") {
+		t.Fatalf("Before: error should mention the failed invoke, got %v", err)
+	}
+}
+
+// TestScriptInterceptor_ConcurrentSlowInvokes verifies concurrent Before
+// calls whose scripts each block on a slow actor invoke do not serialize
+// behind a single runtime lock: with interceptorPoolSize slots the wall
+// time must be well below N × delay.
+func TestScriptInterceptor_ConcurrentSlowInvokes(t *testing.T) {
+	a, shutdown := newTestApp(t)
+	defer shutdown()
+
+	const delay = 250 * time.Millisecond
+	_, err := a.Spawn(actor.PropsFromFunc(func() actor.Actor {
+		return &slowActor{delay: delay}
+	}), "slow")
+	if err != nil {
+		t.Fatalf("Spawn slow: %v", err)
+	}
+
+	src := `import Context from "gospore"
+import ActorRef from "gospore"
+export fun before(ctx: Context, req: any): string {
+	var svc: ActorRef = ctx.lookup_service("slow")
+	svc.invoke("test.slow", "ping")
+	return ""
+}`
+	si, err := gateway.NewScriptInterceptor(a, src)
+	if err != nil {
+		t.Fatalf("NewScriptInterceptor: %v", err)
+	}
+
+	req := &gateway.GatewayRequest{CallID: "test.echo", CustomerID: "alice"}
+	const n = 8
+	start := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := si.Before(context.Background(), req); err != nil {
+				t.Errorf("Before: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+
+	// Serialized execution would take >= n*delay = 2s; pooled execution
+	// lands near one delay. 1.5s leaves generous headroom on slow CI.
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("Before calls serialized: %d invocations of %v took %v", n, delay, elapsed)
 	}
 }
 
@@ -201,6 +322,29 @@ func (a *quotaActor) OnStart(ctx actor.Context) error {
 		return map[string]any{"allowed": a.allowed}, nil
 	})
 	_ = ctx.RegisterDomain("quota").Expose()
+	return nil
+}
+
+// slowActor exposes "test.slow" as a stateless handler so concurrent
+// invocations fork instead of serializing on the actor's cell goroutine.
+// Param and return are scalars: typed-struct payloads over the script
+// adapter path currently fail receiver-side decode ("unknown schema ID"
+// — the cell schema registrar and the codec's registry are two views;
+// tracked as a known gap), so this fixture mirrors the proven
+// test.echo scalar contract.
+type slowActor struct {
+	actor.Host
+	delay time.Duration
+}
+
+func (a *slowActor) OnStart(ctx actor.Context) error {
+	_ = ctx.Register("test.slow", func(_ actor.PureContext, _ string) (string, error) {
+		if a.delay > 0 {
+			time.Sleep(a.delay)
+		}
+		return "ok", nil
+	})
+	_ = ctx.RegisterDomain("slow").Expose()
 	return nil
 }
 

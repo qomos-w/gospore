@@ -2,9 +2,9 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	"github.com/qomos-w/gospore/actor"
 	"github.com/qomos-w/gospore/id"
@@ -23,7 +23,49 @@ type gatewayScriptContext struct {
 	app      AppHost
 	rt       *script.Runtime
 	refCache map[string]cell.ActorRef
-	mu       sync.Mutex
+	// callCtx is the gateway request context active for the current
+	// script execution (Before/After). Actor invocations started by the
+	// script inherit its deadline; a request that is already done falls
+	// back to Background bounded by GatewayInvokeTimeout.
+	callCtx context.Context
+	mu      sync.Mutex
+}
+
+// actorInvokeCtx derives the context for a synchronous actor invoke made
+// from an interceptor script. It honors the request deadline when the
+// request is still live, and otherwise applies GatewayInvokeTimeout as the
+// bound.
+func (g *gatewayScriptContext) actorInvokeCtx() (context.Context, context.CancelFunc) {
+	g.mu.Lock()
+	base := g.callCtx
+	g.mu.Unlock()
+	if base != nil {
+		if _, hasDeadline := base.Deadline(); hasDeadline && base.Err() == nil {
+			return base, func() {}
+		}
+	}
+	return context.WithTimeout(context.Background(), GatewayInvokeTimeout)
+}
+
+// streamInvokeCtx derives the context for a stream invoke. Streams are not
+// capped by GatewayInvokeTimeout (their lifetime is managed via the
+// returned Stream), but they still die with the request when one is live.
+func (g *gatewayScriptContext) streamInvokeCtx() context.Context {
+	g.mu.Lock()
+	base := g.callCtx
+	g.mu.Unlock()
+	if base != nil && base.Err() == nil {
+		return base
+	}
+	return context.Background()
+}
+
+// setCallCtx records the request context for the duration of one script
+// execution.
+func (g *gatewayScriptContext) setCallCtx(ctx context.Context) {
+	g.mu.Lock()
+	g.callCtx = ctx
+	g.mu.Unlock()
 }
 
 func (g *gatewayScriptContext) Self() string {
@@ -36,15 +78,15 @@ func (g *gatewayScriptContext) Self() string {
 
 func (g *gatewayScriptContext) LookupID(idStr string) cell.ActorRef {
 	if g.app.Tree() == nil {
-		return nil
+		return g.deadRef("actor tree unavailable")
 	}
 	cid, err := identity.ParseCanonicalID(idStr)
 	if err != nil {
-		return nil
+		return g.deadRef(fmt.Sprintf("parse actor id %q: %v", idStr, err))
 	}
 	r, ok := g.app.Tree().LookupID(id.From(cid))
 	if !ok {
-		return nil
+		return g.deadRef(fmt.Sprintf("actor %s not found", idStr))
 	}
 	return g.wrapRef(r)
 }
@@ -52,9 +94,20 @@ func (g *gatewayScriptContext) LookupID(idStr string) cell.ActorRef {
 func (g *gatewayScriptContext) LookupService(name string) cell.ActorRef {
 	r, ok := g.app.LookupService(name)
 	if !ok {
-		return nil
+		return g.deadRef(fmt.Sprintf("service %q not found", name))
 	}
 	return g.wrapRef(r)
+}
+
+// deadRef returns a non-nil ActorRef whose invokes always fail. Host code
+// must never return a nil ActorRef to scripts: method calls on nil host
+// objects panic the VM ("invalid object handle").
+func (g *gatewayScriptContext) deadRef(reason string) cell.ActorRef {
+	adapter := &gatewayActorRefAdapter{gctx: g, deadReason: reason}
+	if g.rt != nil {
+		_ = g.rt.RegisterHostInterfaceInstance("gospore", "ActorRef", adapter)
+	}
+	return adapter
 }
 
 func (g *gatewayScriptContext) Namespace() string {
@@ -89,7 +142,7 @@ func (g *gatewayScriptContext) wrapRef(r ref.Ref) cell.ActorRef {
 		g.mu.Unlock()
 		return cached
 	}
-	adapter := &gatewayActorRefAdapter{targetRef: r, app: g.app, rt: g.rt}
+	adapter := &gatewayActorRefAdapter{targetRef: r, gctx: g}
 	if g.rt != nil {
 		_ = g.rt.RegisterHostInterfaceInstance("gospore", "ActorRef", adapter)
 	}
@@ -101,43 +154,49 @@ func (g *gatewayScriptContext) wrapRef(r ref.Ref) cell.ActorRef {
 // gatewayActorRefAdapter implements cell.ActorRef by delegating to ref.Ref.
 // It runs in the Gateway process, not inside a Cell, so it uses the App's
 // public Invoke surface rather than the low-level cell dispatch path.
+// Invoke failures travel through cell.InvokeResult.Err (value channel);
+// lookup misses produce a dead ref (deadReason set) instead of nil.
 type gatewayActorRefAdapter struct {
-	targetRef ref.Ref
-	app       AppHost
-	rt        *script.Runtime
+	targetRef  ref.Ref
+	gctx       *gatewayScriptContext
+	deadReason string
 }
 
-func (a *gatewayActorRefAdapter) Invoke(callID string, payload any) any {
-	if a.targetRef == nil {
-		return nil
+func (a *gatewayActorRefAdapter) Invoke(callID string, payload any) cell.InvokeResult {
+	if a.deadReason != "" {
+		return cell.InvokeResult{Err: fmt.Sprintf("gateway script: invoke %s: %s", callID, a.deadReason)}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if a.targetRef == nil {
+		return cell.InvokeResult{Err: fmt.Sprintf("gateway script: invoke %s: no target ref", callID)}
+	}
+	ctx, cancel := a.gctx.actorInvokeCtx()
 	defer cancel()
 	call := a.targetRef.Invoke(ctx, callID, payload)
 	if call == nil {
-		return nil
+		return cell.InvokeResult{Err: fmt.Sprintf("gateway script: invoke %s: no call returned", callID)}
 	}
 	defer call.Close()
 	val, err := call.Recv()
 	if err != nil {
-		return nil
+		return cell.InvokeResult{Err: fmt.Sprintf("gateway script: invoke %s: %v", callID, err)}
 	}
-	return val
+	return cell.InvokeResult{Value: val}
 }
 
 func (a *gatewayActorRefAdapter) InvokeStream(callID string, payload any) cell.Stream {
+	if a.deadReason != "" {
+		return cell.DeadStream{Reason: a.deadReason}
+	}
 	if a.targetRef == nil {
 		return nil
 	}
-	// Actor invocations do not use context timeouts; lifetime is managed
-	// by the caller via the returned Stream's Close/Cancel methods.
-	call := a.targetRef.Invoke(context.Background(), callID, payload)
+	call := a.targetRef.Invoke(a.gctx.streamInvokeCtx(), callID, payload)
 	if call == nil {
 		return nil
 	}
 	sa := &gatewayStreamAdapter{call: call}
-	if a.rt != nil {
-		_ = a.rt.RegisterHostInterfaceInstance("gospore", "Stream", sa)
+	if a.gctx.rt != nil {
+		_ = a.gctx.rt.RegisterHostInterfaceInstance("gospore", "Stream", sa)
 	}
 	return sa
 }
