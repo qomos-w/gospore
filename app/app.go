@@ -156,6 +156,11 @@ type App interface {
 	// ServeSession. Must not be called before Run.
 	GatewayServer() *gateway.Server
 
+	// GatewayReady returns a channel that is closed once the HTTP
+	// gateway is listening. nil when no gateway is configured.
+	// Must not be called before Run.
+	GatewayReady() <-chan struct{}
+
 	// SpawnGatewaySession spawns a dedicated caller cell under root for
 	// one gateway connection ("gatesession"). Calls the connection issues
 	// should go through InvokeAsCaller with the returned Ref so their

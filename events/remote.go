@@ -10,8 +10,13 @@ import "github.com/qomos-w/gospore/id"
 // subscriptions (actor.Subscription[Record]) are active.
 // Phase 2 transport implementations wire a RemoteSink that serialises
 // Records and pushes them over the network to out-of-process observers.
+//
+// Push is invoked OUTSIDE the events store lock and may be called
+// concurrently from different Push callers, potentially out of order.
+// Implementations must be safe for concurrent use and non-blocking;
+// silently drop on backpressure. Sinks that need per-actor ordering
+// must buffer internally.
 type RemoteSink interface {
 	// Push delivers rec to remote subscribers of actorID.
-	// Implementations must be non-blocking; silently drop on backpressure.
 	Push(actorID id.ActorID, rec Record)
 }

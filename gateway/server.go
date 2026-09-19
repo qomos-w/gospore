@@ -155,6 +155,7 @@ func NewServer(app AppHost, interceptor GatewayInterceptor, addr string) *Server
 		app:         app,
 		interceptor: interceptor,
 		httpServer:  &http.Server{Addr: addr},
+		ready:       make(chan struct{}),
 	}
 }
 
@@ -202,11 +203,10 @@ func (s *Server) WithBinaryOnly(v bool) {
 }
 
 // ReadyChan returns a channel that closes when the server is accepting
-// connections. Call before Run.
+// connections. Safe to call from any goroutine, concurrently with Run;
+// the channel is created eagerly in NewServer so there is no lazy-init
+// race between a reader here and Run's close.
 func (s *Server) ReadyChan() <-chan struct{} {
-	if s.ready == nil {
-		s.ready = make(chan struct{})
-	}
 	return s.ready
 }
 
@@ -237,9 +237,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.listenerMu.Unlock()
 
 	// Signal readiness — the kernel is accepting connections on the socket.
-	if s.ready != nil {
-		close(s.ready)
-	}
+	close(s.ready)
 
 	// Preserve actual bound address.
 	s.httpServer.Addr = ln.Addr().String()

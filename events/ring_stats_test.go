@@ -1,7 +1,9 @@
 package events
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qomos-w/gospore/actor"
 	"github.com/qomos-w/gospore/id"
@@ -56,3 +58,71 @@ func TestStoreRingStatsAggregates(t *testing.T) {
 		t.Fatalf("stats[1] = %+v", stats[1])
 	}
 }
+
+// blockingSink blocks inside Push until unblocked, signalling first entry.
+type blockingSink struct {
+	once     sync.Once
+	entered  chan struct{}
+	unblock  chan struct{}
+}
+
+func (b *blockingSink) Push(id.ActorID, Record) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.unblock
+}
+
+// TestPushRemoteSinkOutsideLock pins that RemoteSink dispatch happens
+// outside the store lock: a wedged (e.g. network-blocked) sink must not
+// serialise other actors' ring writes behind it. The wedged sink still
+// blocks its own caller's return (implementations are contractually
+// non-blocking; this store-side guarantee is about lock scope).
+func TestPushRemoteSinkOutsideLock(t *testing.T) {
+	s := NewStore(4)
+	s.RemoteSink = &blockingSink{entered: make(chan struct{}), unblock: make(chan struct{})}
+
+	a, err := id.Parse("01000000000000000000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := id.Parse("02000000000000000000000000000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First push parks inside the sink dispatch.
+	parked := make(chan struct{})
+	go func() {
+		defer close(parked)
+		s.Push(a, Record{Kind: actor.WatchStarted})
+	}()
+	sink := s.RemoteSink.(*blockingSink)
+	select {
+	case <-sink.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sink never entered")
+	}
+
+	// The store lock must be free: a lock-taking read completes while the
+	// dispatch is wedged, and a push for another actor lands in its ring.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Push(b, Record{Kind: actor.WatchStarted})
+	}()
+	deadline := time.After(2 * time.Second)
+	for {
+		if recs := s.Recent(b, 0, nil, 1); len(recs) == 1 && recs[0].SeqNo == 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("Push ring write serialized behind a blocked RemoteSink — dispatch must be outside the store lock")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	close(sink.unblock)
+	<-done
+	<-parked
+}
+

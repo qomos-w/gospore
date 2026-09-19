@@ -75,10 +75,17 @@ func (s *StoreImpl) Push(actorID id.ActorID, rec Record) {
 		default:
 		}
 	}
-	if s.RemoteSink != nil {
-		s.RemoteSink.Push(actorID, rec)
-	}
+	sink := s.RemoteSink
 	s.mu.Unlock()
+
+	// Remote dispatch runs outside the store lock: a transport-backed
+	// RemoteSink doing blocking network I/O must not serialise every
+	// actor's Push behind it. Concurrent Pushes may dispatch out of
+	// order; sinks that need ordering must buffer internally (see
+	// RemoteSink contract).
+	if sink != nil {
+		sink.Push(actorID, rec)
+	}
 }
 
 // Recent returns historical Records from the actor's ring.
