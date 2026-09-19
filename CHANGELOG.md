@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Compile-time execution-mode registration** (P1-5): `actor.RegisterStateful[Req, Resp]` / `actor.RegisterStateless[Req, Resp]` pin the handler's execution mode in the function signature — a closure whose context parameter doesn't match does not compile, replacing reflection's silently-inferred wrong-lane hazard. Thin sugar over the same pipeline; `ctx.Register` reflection inference remains for dynamic/scripted paths.
+- **Benchmark baselines** outside handler/invoke/promise: wire-frame marshal/unmarshal (small/typical/64KiB/header-heavy; ~214ns small marshal, ~673ns typical), events ring `Push` (~48ns, zero-alloc) and store `Push` (~70ns), transport `Local.Send` (~41ns, zero-alloc) and `MemoryRemote.Send` buffered hop (~448ns incl. buffer-full retry).
+- **Cross-host script-value normalization** (P2-13): `cell.ScriptNormalizeValue` — one script-visible shape for callable replies across the cell and gateway script hosts. The gateway previously handed raw `[]byte` (or typed structs the VM panics on) to scripts while the cell host returned a string under a codec; both now normalize identically (string under codec, JSON-decoded otherwise, structs → plain maps). Full host unification was evaluated and rejected (Context surfaces intentionally differ); the value contract is the part that must not drift.
 - **WS timeout governance**: all eight gateway WS connection
   timeouts/buffers consolidated into `gateway.WSTimeouts`
   (`gateway.SetWSTimeouts`, `app.WithGatewayWSTimeouts`): ping
@@ -30,6 +33,7 @@
 
 ### Fixed
 
+- **Planner/`Final` cancellation cause preserved** (reported from a live sporemind pause incident): consuming-context cancellation surfaced as the bare `invoke.ErrCallCancelled` sentinel, defeating downstream `errors.Is(err, context.Canceled)` classification (a pause was misread as a tool failure / retryable stream error). `planner.Stream` now rejects with `ctx.Err()` when the sentinel arrives with a cancelled consumer context; `Final`'s translation no longer requires the fallback-deadline gate (the io.EOF branch keeps it — EOF is also the legitimate void-End shape). Pinned by `TestPlannerCancel_RejectsWithContextCause`.
 - **`gateway.Server.ReadyChan` data race**: lazy channel initialization
   raced `Run`'s close; the channel is now created eagerly in
   `NewServer` and the method is documented concurrent-safe.
@@ -45,6 +49,7 @@
 
 ### Changed
 
+- `gateway/ws.go` (767 lines) split into `ws_frame.go` (protocol conversion, TBC sniffing, auth codec), `ws_frame_conn.go` (connection machinery: tuning, outCh/overflow, deadlines, drain) and the 67-line upgrade entrypoint — pure code movement, no behavior change.
 - ARCHITECTURE.md reconciled with the above (new §7.6 WS lifecycle,
   §4.22 ring contract + known `HasSubscribers` deviation documented,
   §8.4 wire codegen reality, §4.20→4.23 renumbering closing the §4.21
