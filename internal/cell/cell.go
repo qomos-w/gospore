@@ -80,47 +80,47 @@ type Cell struct {
 	// startCh closes once the cell reaches its first terminal start
 	// outcome (OnStart completed, or the cell was destroyed first).
 	// app.waitForCellStart blocks on it instead of polling IsStarted.
-	startCh                   chan struct{}
-	startOnce                 sync.Once
-	svcReg                    service.Registry
-	discoveryProvider         discovery.Provider
-	discoveryAddress          string
+	startCh           chan struct{}
+	startOnce         sync.Once
+	svcReg            service.Registry
+	discoveryProvider discovery.Provider
+	discoveryAddress  string
 	// host capability groups, resolved once in New from Config.Host.
-	svcHost      ServiceHost
-	treeHost     TreeHost
-	invokeAsHost InvokeAsHost
-	deliveryHost DeliveryHost
-	resReg       resource.Registry
-	namespace                 string
-	codec                     codec.Codec
-	schemas                   schema.Reader
-	rootRef                   ref.Ref
-	clock                     actor.Clock
-	monitor                   Monitor
-	events                    *events.StoreImpl
-	projections               *projection.StoreImpl
-	policyStore               actor.PolicyStore
-	projectionVersion         uint64
-	projectionState           projection.FieldSnapshot
-	projectionMu              sync.Mutex                 // serializes applyProjectionIfObserved across owner/system/pure lanes
-	componentSlots            []projection.ComponentSlot // scanned from `gospore:"component"` tags
-	componentSlotsMu          sync.RWMutex               // guards componentSlots writes (system lane) vs external readers
-	eventMeta                 map[string]eventMetaEntry  // kind → metadata, collected via RegisterEventKind
-	eventMetaMu               sync.RWMutex               // protects eventMeta reads from external goroutines
-	timerMeta                 map[string]timerMetaEntry  // callID → delayed self-call routing metadata
-	timerMetaMu               sync.RWMutex               // protects timerMeta reads from external goroutines
-	eventBus                  *EventBus                  // App-scoped user-event broadcast bus; nil disables EmitEvent
-	scriptRuntime             *scriptRuntimeOwner
-	lifecycleCtx              context.Context
-	cancelLifecycle           context.CancelFunc
+	svcHost           ServiceHost
+	treeHost          TreeHost
+	invokeAsHost      InvokeAsHost
+	deliveryHost      DeliveryHost
+	resReg            resource.Registry
+	namespace         string
+	codec             codec.Codec
+	schemas           schema.Reader
+	rootRef           ref.Ref
+	clock             actor.Clock
+	monitor           Monitor
+	events            *events.StoreImpl
+	projections       *projection.StoreImpl
+	policyStore       actor.PolicyStore
+	projectionVersion uint64
+	projectionState   projection.FieldSnapshot
+	projectionMu      sync.Mutex                 // serializes applyProjectionIfObserved across owner/system/pure lanes
+	componentSlots    []projection.ComponentSlot // scanned from `gospore:"component"` tags
+	componentSlotsMu  sync.RWMutex               // guards componentSlots writes (system lane) vs external readers
+	eventMeta         map[string]eventMetaEntry  // kind → metadata, collected via RegisterEventKind
+	eventMetaMu       sync.RWMutex               // protects eventMeta reads from external goroutines
+	timerMeta         map[string]timerMetaEntry  // callID → delayed self-call routing metadata
+	timerMetaMu       sync.RWMutex               // protects timerMeta reads from external goroutines
+	eventBus          *EventBus                  // App-scoped user-event broadcast bus; nil disables EmitEvent
+	scriptRuntime     *scriptRuntimeOwner
+	lifecycleCtx      context.Context
+	cancelLifecycle   context.CancelFunc
 	// runCancel cancels Cell.Run's ctx so it exits during Destroy.
 	// Written by the Run goroutine, read by the system lane (handleIdle /
 	// handleDestroy) — guard with cancelMu.
-	runCancel     context.CancelFunc
-	cancelMu      sync.Mutex
-	invokeTable   *invoke.PendingTable
-	corIDGen      *id.CorIDGenerator
-	idGen         *id.Canonical
+	runCancel   context.CancelFunc
+	cancelMu    sync.Mutex
+	invokeTable *invoke.PendingTable
+	corIDGen    *id.CorIDGenerator
+	idGen       *id.Canonical
 	// initCh/startCh close on the first terminal init/start outcome
 	// (see InitDone/StartDone). They replace the former
 	// OnInitCompleted/OnStartCompleted config callbacks.
@@ -276,43 +276,43 @@ func (c *Cell) newHandlerTable() *handler.Table {
 // state — the caller must start the goroutine to enter the running loop.
 func New(cfg Config) *Cell {
 	c := &Cell{
-		self:                      cfg.Self,
-		parent:                    cfg.Parent,
-		actor:                     cfg.Actor,
-		props:                     cfg.Props,
-		role:                      cfg.Props.Role(),
-		supervisor:                cfg.Supervisor,
-		handlers:                  cfg.Handlers,
-		strictHandlers:            cfg.StrictHandlers,
-		children:                  newChildSet(),
-		watchers:                  newWatcherSet(),
-		done:                      make(chan struct{}),
-		startCh:                   make(chan struct{}),
-		svcReg:                    cfg.ServiceRegistry,
-		discoveryProvider:         cfg.DiscoveryProvider,
-		discoveryAddress:          cfg.DiscoveryAddress,
-		resReg:                    cfg.Resources,
-		namespace:                 cfg.Namespace,
-		codec:                     cfg.Codec,
-		schemas:                   cfg.Schemas,
-		rootRef:                   cfg.RootRef,
-		clock:                     cfg.Clock,
-		monitor:                   cfg.Monitor,
-		events:                    cfg.Events,
-		projections:               cfg.Projections,
-		policyStore:               cfg.PolicyStore,
-		invokeTable:               cfg.InvokeTable,
-		corIDGen:                  cfg.CorIDGen,
-		idGen:                     cfg.IDGen,
-		initCh:                    make(chan struct{}),
-		replyReg:                  newReplyRegistry(cfg.InvokeTable),
-		loops:                     make(map[string]*loopLane),
-		laneStats:                 make(map[string]*laneMetrics),
-		eventMeta:                 make(map[string]eventMetaEntry),
-		timerMeta:                 make(map[string]timerMetaEntry),
-		eventBus:                  cfg.EventBus,
-		logger:                    cfg.Logger,
-		logHook:                   cfg.LogHook,
+		self:              cfg.Self,
+		parent:            cfg.Parent,
+		actor:             cfg.Actor,
+		props:             cfg.Props,
+		role:              cfg.Props.Role(),
+		supervisor:        cfg.Supervisor,
+		handlers:          cfg.Handlers,
+		strictHandlers:    cfg.StrictHandlers,
+		children:          newChildSet(),
+		watchers:          newWatcherSet(),
+		done:              make(chan struct{}),
+		startCh:           make(chan struct{}),
+		svcReg:            cfg.ServiceRegistry,
+		discoveryProvider: cfg.DiscoveryProvider,
+		discoveryAddress:  cfg.DiscoveryAddress,
+		resReg:            cfg.Resources,
+		namespace:         cfg.Namespace,
+		codec:             cfg.Codec,
+		schemas:           cfg.Schemas,
+		rootRef:           cfg.RootRef,
+		clock:             cfg.Clock,
+		monitor:           cfg.Monitor,
+		events:            cfg.Events,
+		projections:       cfg.Projections,
+		policyStore:       cfg.PolicyStore,
+		invokeTable:       cfg.InvokeTable,
+		corIDGen:          cfg.CorIDGen,
+		idGen:             cfg.IDGen,
+		initCh:            make(chan struct{}),
+		replyReg:          newReplyRegistry(cfg.InvokeTable),
+		loops:             make(map[string]*loopLane),
+		laneStats:         make(map[string]*laneMetrics),
+		eventMeta:         make(map[string]eventMetaEntry),
+		timerMeta:         make(map[string]timerMetaEntry),
+		eventBus:          cfg.EventBus,
+		logger:            cfg.Logger,
+		logHook:           cfg.LogHook,
 		// Pre-create ingress queues so Recv() can enqueue messages before
 		// openIngressLoops() starts the goroutines. This avoids a race
 		// between go cell.Run() and cell.Recv(Init) in the App startup path.
@@ -648,35 +648,14 @@ func (c *Cell) eventRoutingKey() string {
 	}
 	return c.namespace
 }
-func (c *Cell) nativeSpawnFn() func(ref.Ref, actor.Props, string) (ref.Ref, error) {
-	if c.treeHost == nil {
-		return nil
-	}
-	return c.treeHost.Spawn
+func (c *Cell) nativeSvcHost() ServiceHost {
+	return c.svcHost
 }
-func (c *Cell) nativeStopFn() func(ref.Ref) error {
-	if c.treeHost == nil {
-		return nil
-	}
-	return c.treeHost.Stop
+func (c *Cell) nativeTreeHost() TreeHost {
+	return c.treeHost
 }
-func (c *Cell) nativeDeliverFn() func(ref.Ref, mailbox.Envelope) error {
-	if c.deliveryHost == nil {
-		return nil
-	}
-	return c.deliveryHost.Deliver
-}
-func (c *Cell) nativeLookupIDFn() func(id.ActorID) (ref.Ref, bool) {
-	if c.treeHost == nil {
-		return nil
-	}
-	return c.treeHost.LookupID
-}
-func (c *Cell) nativeLookupServiceFn() func(string) (ref.Ref, bool) {
-	if c.svcReg == nil {
-		return nil
-	}
-	return c.svcReg.Lookup
+func (c *Cell) nativeDeliveryHost() DeliveryHost {
+	return c.deliveryHost
 }
 
 func (c *Cell) nativeChildrenFn() func() []ref.Ref {

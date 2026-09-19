@@ -11,7 +11,6 @@ import (
 
 	"github.com/qomos-w/gospore/actor"
 	"github.com/qomos-w/gospore/codec"
-	gschema "github.com/qomos-w/gospore/schema"
 	"github.com/qomos-w/gospore/id"
 	"github.com/qomos-w/gospore/internal/handler"
 	"github.com/qomos-w/gospore/invoke"
@@ -20,24 +19,25 @@ import (
 	"github.com/qomos-w/gospore/plan"
 	"github.com/qomos-w/gospore/projection"
 	"github.com/qomos-w/gospore/ref"
+	gschema "github.com/qomos-w/gospore/schema"
 	"github.com/qomos-w/spore/identity"
 	"github.com/qomos-w/spore/schema"
 	"github.com/qomos-w/spore/script"
 )
 
 // nativeCellContext extracts the Cell fields needed by scriptRuntimeOwner
-// to bind native capabilities. Implemented by Cell.
+// to bind native capabilities. Implemented by Cell. The App-level service
+// groups travel as the Phase-2 Host interfaces (ServiceHost/TreeHost/
+// DeliveryHost), resolved once in New, rather than per-field closures.
 type nativeCellContext interface {
 	nativeSelf() ref.Ref
 	nativeParent() ref.Ref
 	nativeNamespace() string
 	nativeDone() <-chan struct{}
 	nativeClock() actor.Clock
-	nativeSpawnFn() func(ref.Ref, actor.Props, string) (ref.Ref, error)
-	nativeStopFn() func(ref.Ref) error
-	nativeDeliverFn() func(ref.Ref, mailbox.Envelope) error
-	nativeLookupIDFn() func(id.ActorID) (ref.Ref, bool)
-	nativeLookupServiceFn() func(string) (ref.Ref, bool)
+	nativeSvcHost() ServiceHost
+	nativeTreeHost() TreeHost
+	nativeDeliveryHost() DeliveryHost
 	nativeChildrenFn() func() []ref.Ref
 	nativeRoot() ref.Ref
 	nativeInvokeTable() *invoke.PendingTable
@@ -130,20 +130,18 @@ type streamAdapter struct {
 // "gospore" namespace, exposed to scripts as ScriptContext.
 type scriptRuntimeOwner struct {
 	spore       *script.Runtime
-	codec         codec.Codec
+	codec       codec.Codec
 	sporeYields map[string]int // callID -> yield count
-	adapter       *scriptContextAdapter
+	adapter     *scriptContextAdapter
 	// Cell context for native capability bindings
 	self           ref.Ref
 	parent         ref.Ref
 	namespace      string
 	done           <-chan struct{}
 	clock          actor.Clock
-	spawn          func(ref.Ref, actor.Props, string) (ref.Ref, error)
-	stopFn         func(ref.Ref) error
-	deliver        func(ref.Ref, mailbox.Envelope) error
-	lookupID       func(id.ActorID) (ref.Ref, bool)
-	lookupService  func(string) (ref.Ref, bool)
+	svcHost        ServiceHost
+	treeHost       TreeHost
+	deliveryHost   DeliveryHost
 	children       func() []ref.Ref
 	root           ref.Ref
 	invokeTable    *invoke.PendingTable
@@ -164,11 +162,9 @@ func newScriptRuntimeOwner(c codec.Codec, cx nativeCellContext) *scriptRuntimeOw
 		o.namespace = cx.nativeNamespace()
 		o.done = cx.nativeDone()
 		o.clock = cx.nativeClock()
-		o.spawn = cx.nativeSpawnFn()
-		o.stopFn = cx.nativeStopFn()
-		o.deliver = cx.nativeDeliverFn()
-		o.lookupID = cx.nativeLookupIDFn()
-		o.lookupService = cx.nativeLookupServiceFn()
+		o.svcHost = cx.nativeSvcHost()
+		o.treeHost = cx.nativeTreeHost()
+		o.deliveryHost = cx.nativeDeliveryHost()
 		o.children = cx.nativeChildrenFn()
 		o.root = cx.nativeRoot()
 		o.invokeTable = cx.nativeInvokeTable()
@@ -535,7 +531,6 @@ func (a *scriptContextAdapter) Now() string {
 	return a.owner.clock.Now().Format(time.RFC3339Nano)
 }
 
-
 // deadRef returns a non-nil ActorRef whose invokes always fail with an
 // error. Host code must never return a nil ActorRef to scripts: calling a
 // method on a nil host object panics the VM process ("invalid object
@@ -550,14 +545,14 @@ func (a *scriptContextAdapter) deadRef(reason string) ActorRef {
 }
 
 func (a *scriptContextAdapter) LookupID(idStr string) ActorRef {
-	if a.owner.lookupID == nil {
+	if a.owner.treeHost == nil {
 		return a.deadRef("lookup_id unavailable in this host")
 	}
 	cid, err := identity.ParseCanonicalID(idStr)
 	if err != nil {
 		return a.deadRef(fmt.Sprintf("parse actor id %q: %v", idStr, err))
 	}
-	r, ok := a.owner.lookupID(id.From(cid))
+	r, ok := a.owner.treeHost.LookupID(id.From(cid))
 	if !ok {
 		return a.deadRef(fmt.Sprintf("actor %s not found", idStr))
 	}
@@ -569,10 +564,10 @@ func (a *scriptContextAdapter) LookupID(idStr string) ActorRef {
 }
 
 func (a *scriptContextAdapter) LookupService(name string) ActorRef {
-	if a.owner.lookupService == nil {
+	if a.owner.svcHost == nil {
 		return a.deadRef("lookup_service unavailable in this host")
 	}
-	r, ok := a.owner.lookupService(name)
+	r, ok := a.owner.svcHost.LookupService(name)
 	if !ok {
 		return a.deadRef(fmt.Sprintf("service %q not found", name))
 	}
@@ -584,11 +579,11 @@ func (a *scriptContextAdapter) LookupService(name string) ActorRef {
 }
 
 func (a *scriptContextAdapter) Spawn(name string, _ int) string {
-	if a.owner.spawn == nil {
+	if a.owner.treeHost == nil {
 		return ""
 	}
 	props := actor.PropsFromFunc(func() actor.Actor { return &actor.Host{} })
-	r, err := a.owner.spawn(a.owner.self, props, name)
+	r, err := a.owner.treeHost.Spawn(a.owner.self, props, name)
 	if err != nil {
 		return ""
 	}
@@ -596,52 +591,52 @@ func (a *scriptContextAdapter) Spawn(name string, _ int) string {
 }
 
 func (a *scriptContextAdapter) Stop(idStr string) bool {
-	if a.owner.lookupID == nil || a.owner.stopFn == nil {
+	if a.owner.treeHost == nil {
 		return false
 	}
 	cid, err := identity.ParseCanonicalID(idStr)
 	if err != nil {
 		return false
 	}
-	r, ok := a.owner.lookupID(id.From(cid))
+	r, ok := a.owner.treeHost.LookupID(id.From(cid))
 	if !ok {
 		return false
 	}
-	return a.owner.stopFn(r) == nil
+	return a.owner.treeHost.Stop(r) == nil
 }
 
 func (a *scriptContextAdapter) Watch(idStr string) bool {
-	if a.owner.lookupID == nil || a.owner.deliver == nil {
+	if a.owner.treeHost == nil || a.owner.deliveryHost == nil {
 		return false
 	}
 	cid, err := identity.ParseCanonicalID(idStr)
 	if err != nil {
 		return false
 	}
-	r, ok := a.owner.lookupID(id.From(cid))
+	r, ok := a.owner.treeHost.LookupID(id.From(cid))
 	if !ok {
 		return false
 	}
-	return a.owner.deliver(r, mailbox.Envelope{Payload: mailbox.Watch{Watcher: a.owner.self}}) == nil
+	return a.owner.deliveryHost.Deliver(r, mailbox.Envelope{Payload: mailbox.Watch{Watcher: a.owner.self}}) == nil
 }
 
 func (a *scriptContextAdapter) Unwatch(idStr string) bool {
-	if a.owner.lookupID == nil || a.owner.deliver == nil {
+	if a.owner.treeHost == nil || a.owner.deliveryHost == nil {
 		return false
 	}
 	cid, err := identity.ParseCanonicalID(idStr)
 	if err != nil {
 		return false
 	}
-	r, ok := a.owner.lookupID(id.From(cid))
+	r, ok := a.owner.treeHost.LookupID(id.From(cid))
 	if !ok {
 		return false
 	}
-	return a.owner.deliver(r, mailbox.Envelope{Payload: mailbox.Unwatch{Watcher: a.owner.self}}) == nil
+	return a.owner.deliveryHost.Deliver(r, mailbox.Envelope{Payload: mailbox.Unwatch{Watcher: a.owner.self}}) == nil
 }
 
 func (a *scriptContextAdapter) After(ms int, callID string, payload any) bool {
-	if a.owner.deliver == nil || a.owner.clock == nil {
+	if a.owner.deliveryHost == nil || a.owner.clock == nil {
 		return false
 	}
 	d := time.Duration(ms) * time.Millisecond
@@ -655,7 +650,7 @@ func (a *scriptContextAdapter) After(ms int, callID string, payload any) bool {
 		if err != nil {
 			return
 		}
-		_ = a.owner.deliver(a.owner.self, mailbox.Envelope{
+		_ = a.owner.deliveryHost.Deliver(a.owner.self, mailbox.Envelope{
 			Frame: message.Frame{
 				From:        a.owner.self.ID(),
 				To:          a.owner.self.ID(),
@@ -686,8 +681,8 @@ func (a *scriptContextAdapter) Call(target string, callID string, payload any, t
 		return nil
 	}
 	result, err := node.Result()
-	if a.owner.stopFn != nil {
-		_ = a.owner.stopFn(node.Ref()) // auto-destroy
+	if a.owner.treeHost != nil {
+		_ = a.owner.treeHost.Stop(node.Ref()) // auto-destroy
 	}
 	if err != nil {
 		return nil
@@ -716,14 +711,14 @@ func (a *scriptContextAdapter) Stream(target string, callID string, payload any,
 
 // spawnPlanNode is the shared helper for Plan, Call, and Stream.
 func (a *scriptContextAdapter) spawnPlanNode(target, callID string, payload any, timeoutMs int) *planNodeActor {
-	if a.owner.spawn == nil || a.owner.lookupID == nil {
+	if a.owner.treeHost == nil {
 		return nil
 	}
 	cid, err := identity.ParseCanonicalID(target)
 	if err != nil {
 		return nil
 	}
-	r, ok := a.owner.lookupID(id.From(cid))
+	r, ok := a.owner.treeHost.LookupID(id.From(cid))
 	if !ok {
 		return nil
 	}
@@ -737,7 +732,7 @@ func (a *scriptContextAdapter) spawnPlanNode(target, callID string, payload any,
 		projections: a.owner.projections,
 	}
 	planActor := newPlanNodeActor(cfg)
-	childRef, err := a.owner.spawn(a.owner.self, planActor.Props(), "")
+	childRef, err := a.owner.treeHost.Spawn(a.owner.self, planActor.Props(), "")
 	if err != nil {
 		return nil
 	}
@@ -789,7 +784,7 @@ func (a *actorRefAdapter) Invoke(callID string, payload any) InvokeResult {
 	if a.deadReason != "" {
 		return InvokeResult{Err: fmt.Sprintf("script invoke %s: %s", callID, a.deadReason)}
 	}
-	if a.owner == nil || a.owner.invokeTable == nil || a.owner.corIDGen == nil || a.owner.deliver == nil || a.targetRef == nil {
+	if a.owner == nil || a.owner.invokeTable == nil || a.owner.corIDGen == nil || a.owner.deliveryHost == nil || a.targetRef == nil {
 		return InvokeResult{Err: fmt.Sprintf("script invoke %s: actor host is not fully wired", callID)}
 	}
 	body, mode, encoding, schemaID, err := a.owner.encodePayload(callID, payload)
@@ -839,7 +834,7 @@ func (a *actorRefAdapter) InvokeStream(callID string, payload any) Stream {
 	if a.deadReason != "" {
 		return DeadStream{Reason: a.deadReason}
 	}
-	if a.owner == nil || a.owner.invokeTable == nil || a.owner.corIDGen == nil || a.owner.deliver == nil || a.targetRef == nil {
+	if a.owner == nil || a.owner.invokeTable == nil || a.owner.corIDGen == nil || a.owner.deliveryHost == nil || a.targetRef == nil {
 		return DeadStream{Reason: "actor host is not fully wired"}
 	}
 	body, mode, encoding, schemaID, err := a.owner.encodePayload(callID, payload)
@@ -873,7 +868,7 @@ func (a *actorRefAdapter) InvokeStream(callID string, payload any) Stream {
 
 func (a *actorRefAdapter) makeSend() invoke.SendFunc {
 	return func(frame message.Frame) error {
-		return a.owner.deliver(a.targetRef, mailbox.Envelope{Frame: frame, Sender: a.owner.self})
+		return a.owner.deliveryHost.Deliver(a.targetRef, mailbox.Envelope{Frame: frame, Sender: a.owner.self})
 	}
 }
 
@@ -935,8 +930,8 @@ func (s *planNodeStreamAdapter) Close() bool {
 
 func (s *planNodeStreamAdapter) destroy() {
 	s.once.Do(func() {
-		if s.owner != nil && s.owner.stopFn != nil {
-			_ = s.owner.stopFn(s.node.Ref())
+		if s.owner != nil && s.owner.treeHost != nil {
+			_ = s.owner.treeHost.Stop(s.node.Ref())
 		}
 	})
 }

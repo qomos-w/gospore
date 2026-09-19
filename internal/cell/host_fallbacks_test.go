@@ -147,6 +147,33 @@ func TestCellHostFallbacks_DeliveryHost(t *testing.T) {
 	c.notifyParentEscalation(context.Canceled)
 }
 
+// scriptFallbackOwner exercises the scriptRuntimeOwner host wiring: a
+// cell without host capabilities must degrade script-context calls the
+// same way the startContext fallbacks do, not panic.
+func TestCellHostFallbacks_ScriptRuntime(t *testing.T) {
+	c := newFallbackCell(t, nil, nil)
+	o := newScriptRuntimeOwner(nil, c)
+	adapter := &scriptContextAdapter{owner: o}
+
+	if got := adapter.Spawn("kid", 0); got != "" {
+		t.Fatalf("Spawn without treeHost = %q, want empty", got)
+	}
+	if got := adapter.Stop("01"); got {
+		t.Fatal("Stop without treeHost = true, want false")
+	}
+	if got := adapter.Watch("01"); got {
+		t.Fatal("Watch without host = true, want false")
+	}
+	if dr := adapter.LookupID("01"); dr == nil {
+		t.Fatal("LookupID without treeHost = nil ActorRef, want dead ref")
+	}
+	if dr := adapter.LookupService("svc"); dr == nil {
+		t.Fatal("LookupService without svcHost = nil ActorRef, want dead ref")
+	}
+	if got := adapter.Plan("01", "x", nil, 0); got != "" {
+		t.Fatalf("Plan without treeHost = %q, want empty", got)
+	}
+}
 // countingDeliveryHost implements only DeliveryHost — partial hosts
 // must still work group-wise.
 type countingDeliveryHost struct {
