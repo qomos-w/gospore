@@ -115,6 +115,7 @@ func (c *Cell) handleStart() {
 
 	c.emitLifecycleEvent(actor.WatchStarted)
 	c.state.Store(cellStarted)
+	c.notifyStartOutcome()
 	if c.onStartCompleted != nil {
 		c.onStartCompleted()
 	}
@@ -179,6 +180,7 @@ func (c *Cell) handleDestroy() {
 	}
 	c.emitLifecycleEvent(actor.WatchTerminated)
 	c.state.Store(cellStopped)
+	c.notifyStartOutcome()
 	// The reply pipeline is gone, so replies for this actor's in-flight
 	// outbound calls can never arrive. Flush the pending table to unblock
 	// every waiting Stream with a terminal error instead of a hang.

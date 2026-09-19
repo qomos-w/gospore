@@ -57,23 +57,28 @@ type loopLane struct {
 // Construction via New(Config). The caller starts the goroutine; the Cell
 // runs until ctx is cancelled.
 type Cell struct {
-	self                      ref.Ref
-	parent                    ref.Ref
-	actor                     actor.Actor
-	props                     actor.Props
-	role                      string // default caller role (from Props.Role)
-	supervisor                supervisor.Supervisor
-	handlers                  *handler.Table
-	strictHandlers            bool
-	children                  *childSet
-	watchers                  *watcherSet
-	services                  []string // global service names registered by this actor (for auto-unregister on Stop)
-	childServices             []string // scoped service names registered by this actor (for auto-unregister on Stop)
-	domains                   []string // domain names declared via RegisterDomain (namespace tracking)
-	pureWG                    sync.WaitGroup
-	state                     atomic.Int32
-	draining                  atomic.Bool
-	done                      chan struct{}
+	self           ref.Ref
+	parent         ref.Ref
+	actor          actor.Actor
+	props          actor.Props
+	role           string // default caller role (from Props.Role)
+	supervisor     supervisor.Supervisor
+	handlers       *handler.Table
+	strictHandlers bool
+	children       *childSet
+	watchers       *watcherSet
+	services       []string // global service names registered by this actor (for auto-unregister on Stop)
+	childServices  []string // scoped service names registered by this actor (for auto-unregister on Stop)
+	domains        []string // domain names declared via RegisterDomain (namespace tracking)
+	pureWG         sync.WaitGroup
+	state          atomic.Int32
+	draining       atomic.Bool
+	done           chan struct{}
+	// startCh closes once the cell reaches its first terminal start
+	// outcome (OnStart completed, or the cell was destroyed first).
+	// app.waitForCellStart blocks on it instead of polling IsStarted.
+	startCh                   chan struct{}
+	startOnce                 sync.Once
 	svcReg                    service.Registry
 	discoveryProvider         discovery.Provider
 	discoveryAddress          string
@@ -113,18 +118,18 @@ type Cell struct {
 	// runCancel cancels Cell.Run's ctx so it exits during Destroy.
 	// Written by the Run goroutine, read by the system lane (handleIdle /
 	// handleDestroy) — guard with cancelMu.
-	runCancel                 context.CancelFunc
-	cancelMu                  sync.Mutex
-	spawn                     func(parent ref.Ref, props actor.Props, name string) (ref.Ref, error)
-	plannerInvoke             func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call
-	stop                      func(target ref.Ref) error
-	destroy                   func(target ref.Ref) error
-	lookupID                  func(id.ActorID) (ref.Ref, bool)
-	invokeTable               *invoke.PendingTable
-	corIDGen                  *id.CorIDGenerator
-	idGen                     *id.Canonical
-	onStartCompleted          func()
-	onInitCompleted           func()
+	runCancel        context.CancelFunc
+	cancelMu         sync.Mutex
+	spawn            func(parent ref.Ref, props actor.Props, name string) (ref.Ref, error)
+	plannerInvoke    func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call
+	stop             func(target ref.Ref) error
+	destroy          func(target ref.Ref) error
+	lookupID         func(id.ActorID) (ref.Ref, bool)
+	invokeTable      *invoke.PendingTable
+	corIDGen         *id.CorIDGenerator
+	idGen            *id.Canonical
+	onStartCompleted func()
+	onInitCompleted  func()
 
 	replyReg *replyRegistry
 	logger   actor.Logger
@@ -340,6 +345,7 @@ func New(cfg Config) *Cell {
 		children:                  newChildSet(),
 		watchers:                  newWatcherSet(),
 		done:                      make(chan struct{}),
+		startCh:                   make(chan struct{}),
 		svcReg:                    cfg.ServiceRegistry,
 		discoveryProvider:         cfg.DiscoveryProvider,
 		discoveryAddress:          cfg.DiscoveryAddress,
@@ -396,6 +402,19 @@ func New(cfg Config) *Cell {
 // (OnStop returned, services unregistered, watchers notified).
 func (c *Cell) Done() <-chan struct{} {
 	return c.done
+}
+
+// StartDone returns a channel that closes on the first terminal start
+// outcome: OnStart completed (cellStarted) or the cell was destroyed
+// before starting. A failed OnStart does NOT close it — the supervisor
+// restart replays OnStart and only the outcome that sticks closes the
+// channel, mirroring what the old poll loop observed.
+func (c *Cell) StartDone() <-chan struct{} {
+	return c.startCh
+}
+
+func (c *Cell) notifyStartOutcome() {
+	c.startOnce.Do(func() { close(c.startCh) })
 }
 
 // IsStarted reports whether the Cell has completed OnStart.

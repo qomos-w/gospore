@@ -332,23 +332,24 @@ func (a *appImpl) waitForCellStart(r ref.Ref) error {
 	if r == nil {
 		return nil
 	}
-	for {
-		c := a.getCell(r.ID())
-		if c == nil {
-			return fmt.Errorf("gospore/app: spawned actor %s not registered", r.ID().String())
-		}
-		if c.IsStarted() {
-			return nil
-		}
-		if c.IsStopped() {
-			return fmt.Errorf("gospore/app: actor %s stopped before completing OnStart", r.ID().String())
-		}
-		select {
-		case <-c.Done():
-			// loop re-checks terminal state and reports a stable error
-		case <-time.After(2 * time.Millisecond):
-		}
+	c := a.getCell(r.ID())
+	if c == nil {
+		return fmt.Errorf("gospore/app: spawned actor %s not registered", r.ID().String())
 	}
+	if c.IsStarted() {
+		return nil
+	}
+	if c.IsStopped() {
+		return fmt.Errorf("gospore/app: actor %s stopped before completing OnStart", r.ID().String())
+	}
+	// Signal, not poll: the cell closes StartDone on its first terminal
+	// start outcome. Wake-ups before that are impossible (no timer), so
+	// the classification below only runs against a settled state.
+	<-c.StartDone()
+	if c.IsStarted() {
+		return nil
+	}
+	return fmt.Errorf("gospore/app: actor %s stopped before completing OnStart", r.ID().String())
 }
 
 // receiveLoop drains inbound frames from the remote transport and
