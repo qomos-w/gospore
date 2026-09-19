@@ -185,7 +185,7 @@ service not found, `405` method not allowed, `500` actor or interceptor error.
 | `codec` / `schema` / `contracts` | Payload codecs, type descriptors, wire contracts |
 | `events` / `projection` | Event rings and versioned state projections |
 | `resource` / `service` | Resource lifecycle, service surface |
-| `transport` / `gateway` / `frontgate` | Cross-process transports and gateways |
+| `transport` / `gateway` | Cross-process transports and gateways |
 | `web-client` | Browser-side client for the bus |
 | `scriptbridge` | Bridges script callables (spore) into actor handlers |
 | `model` / `id` / `internal` | Shared models, ID generation, internals |

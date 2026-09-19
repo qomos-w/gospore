@@ -101,11 +101,20 @@ func NewWithResolver(backend transport.Codec, resolver SchemaResolver) Codec {
 }
 
 // NewJSON returns a Codec wrapping spore's JSONCodec.
+//
+// The returned codec has NO schema resolver: it cannot resolve
+// schema.Set-registered IDs, so receiver-side typed decoding
+// (DecodeByIDInto) fails with "unknown schema ID" for any non-builtin
+// struct. Use NewWithResolver (or the app default NewMulti(schemas))
+// when handlers take typed struct parameters.
 func NewJSON() Codec {
 	return &wrapper{backend: &transport.JSONCodec{}}
 }
 
 // NewBinary returns a Codec wrapping spore's BinaryCodec.
+//
+// The returned codec has NO schema resolver; see NewJSON for the
+// consequences and the resolver-bound alternatives.
 func NewBinary() Codec {
 	return &wrapper{backend: &transport.BinaryCodec{}}
 }

@@ -173,7 +173,7 @@ curl http://localhost:8080/schema
 | `codec` / `schema` / `contracts` | payload 编解码、类型描述符、线格式契约 |
 | `events` / `projection` | 事件 ring 与带版本的状态投影 |
 | `resource` / `service` | 资源生命周期、service 面 |
-| `transport` / `gateway` / `frontgate` | 跨进程传输与网关 |
+| `transport` / `gateway` | 跨进程传输与网关 |
 | `web-client` | 浏览器侧总线客户端 |
 | `scriptbridge` | 把脚本 callable（spore）桥接为 actor handler |
 | `model` / `id` / `internal` | 共享模型、ID 生成、内部实现 |

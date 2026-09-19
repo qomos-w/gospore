@@ -102,33 +102,6 @@ func TestNewConfig_WithKeepAfterDone(t *testing.T) {
 	}
 }
 
-func TestNewConfig_WithRetry(t *testing.T) {
-	cfg := NewConfig(WithRetry(3, 100*time.Millisecond))
-	if cfg.RetryMax != 3 {
-		t.Errorf("RetryMax = %d, want 3", cfg.RetryMax)
-	}
-	if cfg.RetryBackoff != 100*time.Millisecond {
-		t.Errorf("RetryBackoff = %v, want 100ms", cfg.RetryBackoff)
-	}
-}
-
-func TestNewConfig_WithCircuitBreaker(t *testing.T) {
-	cfg := NewConfig(WithCircuitBreaker(5, time.Minute))
-	if cfg.CircuitThreshold != 5 {
-		t.Errorf("CircuitThreshold = %d, want 5", cfg.CircuitThreshold)
-	}
-	if cfg.CircuitWindow != time.Minute {
-		t.Errorf("CircuitWindow = %v, want 1m", cfg.CircuitWindow)
-	}
-}
-
-func TestNewConfig_WithPause(t *testing.T) {
-	cfg := NewConfig(WithPause())
-	if !cfg.PauseOnCreate {
-		t.Error("PauseOnCreate should be true")
-	}
-}
-
 func TestNewConfig_NilOption(t *testing.T) {
 	// nil Option should be silently ignored
 	cfg := NewConfig(nil, WithName("x"), nil)

@@ -107,7 +107,7 @@ func (a *MyActor) OnStop(ctx actor.Context) error  { return nil }
 | `projection` | State Channel 存储（fingerprint + DeltaWindow） |
 | `plan` | Plan Node（调用即子 actor） |
 | `scriptbridge` | spore Capability 静态绑定（§4.19） |
-| `gateway` / `frontgate` | HTTP/WS 边界与 unary 前门 |
+| `gateway` | HTTP/WS 边界、鉴权与拦截器（frontgate 已并入） |
 | `cmd/gospore-gen-ts` | manifest → TS client codegen |
 | `web-client` | TypeScript 客户端 SDK（非 Go 包） |
 

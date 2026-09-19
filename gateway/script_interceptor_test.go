@@ -9,7 +9,6 @@ import (
 
 	"github.com/qomos-w/gospore/actor"
 	"github.com/qomos-w/gospore/app"
-	"github.com/qomos-w/gospore/codec"
 	"github.com/qomos-w/gospore/gateway"
 )
 
@@ -145,7 +144,7 @@ import ActorRef from "gospore"
 import InvokeResult from "gospore"
 export fun before(ctx: Context, req: any): string {
 	var svc: ActorRef = ctx.lookup_service("slow")
-	var result: InvokeResult = svc.invoke("test.slow", "ping")
+	var result: InvokeResult = svc.invoke("test.slow", {})
 	if (result.err != "") {
 		return result.err
 	}
@@ -177,7 +176,7 @@ import ActorRef from "gospore"
 import InvokeResult from "gospore"
 export fun before(ctx: Context, req: any): string {
 	var svc: ActorRef = ctx.lookup_service("does-not-exist")
-	var result: InvokeResult = svc.invoke("test.slow", "ping")
+	var result: InvokeResult = svc.invoke("test.slow", {})
 	if (result.err != "") {
 		return result.err
 	}
@@ -218,7 +217,7 @@ func TestScriptInterceptor_ConcurrentSlowInvokes(t *testing.T) {
 import ActorRef from "gospore"
 export fun before(ctx: Context, req: any): string {
 	var svc: ActorRef = ctx.lookup_service("slow")
-	svc.invoke("test.slow", "ping")
+	svc.invoke("test.slow", {})
 	return ""
 }`
 	si, err := gateway.NewScriptInterceptor(a, src)
@@ -327,22 +326,24 @@ func (a *quotaActor) OnStart(ctx actor.Context) error {
 
 // slowActor exposes "test.slow" as a stateless handler so concurrent
 // invocations fork instead of serializing on the actor's cell goroutine.
-// Param and return are scalars: typed-struct payloads over the script
-// adapter path currently fail receiver-side decode ("unknown schema ID"
-// — the cell schema registrar and the codec's registry are two views;
-// tracked as a known gap), so this fixture mirrors the proven
-// test.echo scalar contract.
+// The typed-struct param exercises the script-adapter decode path: it
+// requires a resolver-bound codec (the app default), which is exactly
+// the wiring this file's newTestApp now pins.
+type slowReq struct {
+	Q string `json:"q"`
+}
+
 type slowActor struct {
 	actor.Host
 	delay time.Duration
 }
 
 func (a *slowActor) OnStart(ctx actor.Context) error {
-	_ = ctx.Register("test.slow", func(_ actor.PureContext, _ string) (string, error) {
+	_ = ctx.Register("test.slow", func(_ actor.PureContext, _ slowReq) (map[string]any, error) {
 		if a.delay > 0 {
 			time.Sleep(a.delay)
 		}
-		return "ok", nil
+		return map[string]any{"ok": true}, nil
 	})
 	_ = ctx.RegisterDomain("slow").Expose()
 	return nil
@@ -352,7 +353,9 @@ func newTestApp(t *testing.T) (app.App, func()) {
 	t.Helper()
 	a, err := app.New(
 		app.WithNamespace("test"),
-		app.WithCodec(codec.NewJSON()),
+		// Default codec (NewMulti bound to the app SchemaSet). A bare
+		// codec.NewJSON() has no schema resolver and cannot decode
+		// typed-struct payloads receiver-side.
 		app.WithRootActor(func() actor.Actor {
 			return &testActor{}
 		}),

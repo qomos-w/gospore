@@ -1589,6 +1589,13 @@ func WithRootID(id id.ActorID) Option {
 }
 
 // WithCodec overrides the default codec backend.
+//
+// The default codec is NewMulti(appSchemas) — bound to the app's
+// schema.Set so typed-struct handler params decode receiver-side. A
+// custom codec that is not resolver-bound (e.g. a bare codec.NewJSON)
+// cannot resolve schema.Set-registered IDs; typed handler parameters
+// will fail to decode. Build custom codecs with codec.NewWithResolver
+// when handlers use typed struct parameters.
 func WithCodec(c codec.Codec) Option {
 	return func(cfg *config) { cfg.codec = c }
 }

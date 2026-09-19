@@ -107,7 +107,7 @@ User actors (Go handlers / script handlers / components)
 | `projection` | State Channel storage (fingerprint + DeltaWindow) |
 | `plan` | Plan Node (a call as a child actor) |
 | `scriptbridge` | Static spore Capability binding (§4.19) |
-| `gateway` / `frontgate` | HTTP/WS boundary and unary front door |
+| `gateway` | HTTP/WS boundary, auth, and interceptors (frontgate was folded in) |
 | `cmd/gospore-gen-ts` | manifest → TS client codegen |
 | `web-client` | TypeScript client SDK (not a Go package) |
 
