@@ -195,12 +195,21 @@ func (c *Call) Final(ctx context.Context) (any, error) {
 	// translateCancellation maps the cancellation-shaped errors produced
 	// when the fallback deadline fires onto the caller-visible cause, so
 	// a timeout reads as context.DeadlineExceeded instead of io.EOF.
+	// ErrCallCancelled is translated whenever the consumer context is
+	// done: the ctx watcher above is what calls Cancel in that window, so
+	// callers can classify the outcome with errors.Is(err, ctx.Err()).
+	// io.EOF keeps the narrower fallbackArmed gate — EOF is also the
+	// legitimate void-End shape and must not be misread as cancellation
+	// without the fallback deadline suspicion.
 	translateCancellation := func(err error) error {
 		if err == nil {
 			return nil
 		}
 
-		if fallbackArmed && (errors.Is(err, ErrCallCancelled) || errors.Is(err, io.EOF)) && timeoutCtx.Err() != nil {
+		if errors.Is(err, ErrCallCancelled) && timeoutCtx.Err() != nil {
+			return timeoutCtx.Err()
+		}
+		if fallbackArmed && errors.Is(err, io.EOF) && timeoutCtx.Err() != nil {
 			return timeoutCtx.Err()
 		}
 		return err

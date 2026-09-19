@@ -959,6 +959,18 @@ func (p *planner) Stream(ctx context.Context, target ref.Ref, callID string, pay
 				return
 			}
 			if err != nil {
+				// Preserve the cancellation cause: the watcher above
+				// converted our ctx cancellation into call.Cancel(), so
+				// Recv reports the sentinel. Re-attach the ctx error so
+				// consumers classify pause/stop/timeout via
+				// errors.Is(err, context.Canceled) instead of mistaking
+				// the sentinel for a tool failure. The bare sentinel
+				// remains observable only for explicit Cancel() without
+				// a cancelled consumer context.
+				if errors.Is(err, invoke.ErrCallCancelled) && ctx.Err() != nil {
+					reject(ctx.Err())
+					return
+				}
 				reject(err)
 				return
 			}
