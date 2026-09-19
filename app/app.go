@@ -599,6 +599,20 @@ func (a *appImpl) Run(ctx context.Context) error {
 	case <-rootInitialized:
 	case <-rootCell.Done():
 		// OnInit failed or cell stopped early.
+	case <-ctx.Done():
+		// Cancelled while boot init was still in flight. The root cell's
+		// Done may never close in this window: its drain path can be
+		// wedged behind a child whose ingress the same cancellation
+		// closed (recursive Spawn waits for child OnInit). Run must
+		// observe the cancellation itself.
+		log.Printf("gospore/app: context cancelled during init; aborting boot")
+		return ctx.Err()
+	}
+
+	// A cancellation that raced Phase 1's completion (or landed between
+	// phases) must not march the boot through Phase 2's waits.
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// Phase 2: Start cells.
@@ -1124,10 +1138,15 @@ func (a *appImpl) buildSpawn(parent ref.Ref, props actor.Props, name string, res
 	// Wait for OnInit to complete so the tree is fully built
 	// before any OnStart runs. A cell that dies during its own OnInit
 	// still counts as built (matches the historical allocate contract).
+	// A cancelled cell context unwedges the caller: without this case a
+	// child whose OnInit never observes cancellation wedges the whole
+	// recursive Spawn chain (and Run's Phase 1) forever.
 	select {
 	case <-childInitialized:
 	case <-childCell.Done():
 		return nil
+	case <-cellCtx.Done():
+		return fmt.Errorf("gospore/app: spawn of %s aborted: context cancelled during OnInit", childRef.ID())
 	}
 
 	// Phase 2: Trigger OnStart (only after batch init is complete).
