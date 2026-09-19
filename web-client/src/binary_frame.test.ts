@@ -23,6 +23,7 @@ describe("binary_frame", () => {
       callId: "",
       subId: "",
       target: "",
+      from: "",
       errorMsg: "",
       payload: new Uint8Array(),
       headers: new Map(),
@@ -43,6 +44,7 @@ describe("binary_frame", () => {
       callId: "filesystem.list_json",
       subId: "sub-123",
       target: "actor-target",
+      from: "actor-0001",
       errorMsg: "",
       payload: new Uint8Array([0x54, 0x42, 0x43, 0x01, 0x02]),
       headers: new Map([
@@ -60,6 +62,7 @@ describe("binary_frame", () => {
     expect(got.callId).toBe(src.callId);
     expect(got.subId).toBe(src.subId);
     expect(got.target).toBe(src.target);
+    expect(got.from).toBe(src.from);
     expect(got.payload).toEqual(src.payload);
     expect(got.headers.get("trace")).toBe("x");
     expect(got.headers.get("auth")).toBe("token");
@@ -75,6 +78,7 @@ describe("binary_frame", () => {
       callId: "",
       subId: "",
       target: "",
+      from: "",
       errorMsg: "",
       payload: new Uint8Array(),
       headers: new Map(),
@@ -110,6 +114,7 @@ describe("binary_frame", () => {
       callId: "",
       subId: "",
       target: "",
+      from: "",
       errorMsg: "",
       payload: new Uint8Array(),
       headers: new Map([
@@ -148,6 +153,7 @@ describe("binary_frame", () => {
       callId: "stream.chunks",
       subId: "sub-abc",
       target: "",
+      from: "",
       errorMsg: "",
       payload: new Uint8Array(1024).fill(0xab),
       headers: new Map(),
@@ -169,6 +175,7 @@ describe("binary_frame", () => {
       callId: "",
       subId: "sub-err",
       target: "",
+      from: "",
       errorMsg: "something went wrong",
       payload: new Uint8Array(),
       headers: new Map(),

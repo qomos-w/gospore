@@ -51,6 +51,9 @@ export interface WireFrame {
   callId: string;
   subId: string;
   target: string;
+  /** Originating actor. Trailing optional field: absent on v1-era
+   *  frames, so decoders must tolerate EOF before reading it. */
+  from: string;
   errorMsg: string;
   payload: Uint8Array;
   headers: Map<string, string>;
@@ -74,12 +77,17 @@ export function marshalWireFrame(f: WireFrame): Uint8Array {
   w.writeString(f.errorMsg);
   w.writeBytes(f.payload);
 
-  const entries = Array.from(f.headers.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  // Byte-wise sort — matches gateway/frame_binary.go's SortedKeys.
+  // localeCompare is locale-aware and orders non-ASCII keys differently.
+  const entries = Array.from(f.headers.entries()).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   w.writeUvarint(BigInt(entries.length));
   for (const [k, v] of entries) {
     w.writeString(k);
     w.writeString(v);
   }
+
+  // `from` is appended after headers (v2 trailing field, v1 compat).
+  w.writeString(f.from ?? "");
 
   return w.finish();
 }
@@ -118,7 +126,10 @@ export function unmarshalWireFrame(data: Uint8Array): WireFrame {
     headers.set(k, v);
   }
 
-  return { flags, type, corId, seq, transId, callId, subId, target, errorMsg, payload, headers };
+  // Trailing `from` (v2): tolerate v1-era frames that end after headers.
+  const from = r.remaining() > 0 ? r.readString() : "";
+
+  return { flags, type, corId, seq, transId, callId, subId, target, from, errorMsg, payload, headers };
 }
 
 /** Error raised during frame marshal/unmarshal. */
@@ -211,6 +222,10 @@ class BinaryReader {
     this.view = new DataView(data.buffer, data.byteOffset, data.byteLength);
     this.off = 0;
     this.end = data.byteLength;
+  }
+
+  remaining(): number {
+    return this.end - this.off;
   }
 
   readByte(): number {

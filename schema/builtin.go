@@ -43,12 +43,15 @@ const (
 	BuiltinMapStringString uint64 = 36
 
 	// System protocol structs (64-79 reserved for gateway control frames).
+	// Struct field names in BuiltinDesc/BuiltinObject follow the wire
+	// contract (the handler structs' json tags): auth frames use their
+	// declared PascalCase names, event/projection frames use lowerFirst.
 	BuiltinAuthReq                   uint64 = 64 // { Token: string }
 	BuiltinAuthOk                    uint64 = 65 // { Manifest: string }
-	BuiltinEventSubscribeServiceReq  uint64 = 66 // { ServiceName: string, Kind: string }
-	BuiltinEventSubscribeInstanceReq uint64 = 67 // { ActorId: string, Kind: string }
-	BuiltinProjectionGetReq          uint64 = 68 // { ActorPath: string, Component: string, SchemaId: uint64 }
-	BuiltinProjectionWatchReq        uint64 = 69 // { ActorPath: string, Component: string, SchemaId: uint64 }
+	BuiltinEventSubscribeServiceReq  uint64 = 66 // { serviceName: string, kind: string }
+	BuiltinEventSubscribeInstanceReq uint64 = 67 // { actorId: string, kind: string }
+	BuiltinProjectionGetReq          uint64 = 68 // { actorPath: string, component: string, schemaId: uint64 }
+	BuiltinProjectionWatchReq        uint64 = 69 // { actorPath: string, component: string, schemaId: uint64 }
 
 	// BuiltinReserveEnd is the last reserved slot. User schemas start at
 	// BuiltinReserveEnd+1 (128) within their namespace.
@@ -226,34 +229,34 @@ var (
 			Kind: spore.TypeKindStruct,
 			Name: "eventSubscribeServiceReq",
 			Fields: []spore.FieldDesc{
-				{Name: "ServiceName", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
-				{Name: "Kind", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "serviceName", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "kind", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
 			},
 		},
 		BuiltinEventSubscribeInstanceReq: {
 			Kind: spore.TypeKindStruct,
 			Name: "eventSubscribeInstanceReq",
 			Fields: []spore.FieldDesc{
-				{Name: "ActorId", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
-				{Name: "Kind", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "actorId", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "kind", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
 			},
 		},
 		BuiltinProjectionGetReq: {
 			Kind: spore.TypeKindStruct,
 			Name: "projectionGetReq",
 			Fields: []spore.FieldDesc{
-				{Name: "ActorPath", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
-				{Name: "Component", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
-				{Name: "SchemaId", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "uint64"}},
+				{Name: "actorPath", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "component", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "schemaId", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "uint64"}},
 			},
 		},
 		BuiltinProjectionWatchReq: {
 			Kind: spore.TypeKindStruct,
 			Name: "projectionWatchReq",
 			Fields: []spore.FieldDesc{
-				{Name: "ActorPath", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
-				{Name: "Component", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
-				{Name: "SchemaId", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "uint64"}},
+				{Name: "actorPath", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "component", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "string"}},
+				{Name: "schemaId", Type: spore.TypeDesc{Kind: spore.TypeKindScalar, Name: "uint64"}},
 			},
 		},
 	}

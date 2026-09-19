@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 import { GosporeClient } from "./client.js";
 import type { Transport, ManagedTransport } from "./transport.js";
 
@@ -53,15 +53,15 @@ function stubManagedTransport(): ManagedTransport & Transport {
 
 interface MockIter {
   iterable: { [Symbol.asyncIterator]: () => AsyncIterator<unknown> };
-  returnSpy: ReturnType<typeof vi.fn>;
+  returnSpy: Mock<[], Promise<IteratorResult<unknown>>>;
 }
 
 function makeParkingIterable(): MockIter {
   let pending: ((r: IteratorResult<unknown>) => void) | null = null;
-  const returnSpy = vi.fn(() => {
+  const returnSpy = vi.fn(async (): Promise<IteratorResult<unknown>> => {
     pending?.({ value: undefined, done: true });
     pending = null;
-    return Promise.resolve({ value: undefined, done: true });
+    return { value: undefined, done: true };
   });
   const iter = {
     next: () => new Promise<IteratorResult<unknown>>((resolve) => { pending = resolve; }),

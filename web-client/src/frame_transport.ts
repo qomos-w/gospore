@@ -575,7 +575,7 @@ export class ManagedFrameTransport implements ManagedTransport {
 
     return {
       flags, type, corId, seq, transId: 0n,
-      callId, subId, target, errorMsg,
+      callId, subId, target, from: "", errorMsg,
       payload: result.data,
       headers: new Map<string, string>(),
     };

@@ -16,7 +16,7 @@
  */
 
 import type { InvokeOptions } from "./transport.js";
-import type { BinaryCodecLike, SchemaRegistryLike, SchemaEntry, TypeDesc, ObjectDesc } from "./schema.js";
+import type { BinaryCodecLike, SchemaRegistryLike, SchemaEntry, ObjectDesc } from "./schema.js";
 import {
   PayloadEncoding,
   PayloadCompression,
@@ -35,72 +35,31 @@ import {
 } from "./channel.js";
 
 /* ------------------------------------------------------------------ */
-/* System-reserved schema IDs                                         */
+/* System-reserved schema IDs, TypeDescs and ObjectDescs               */
 /* ------------------------------------------------------------------ */
-
-const SYS_AUTH_REQ = 64;
-const SYS_AUTH_OK = 65;
-const SYS_EVENT_SUBSCRIBE_SERVICE_REQ = 66;
-const SYS_EVENT_SUBSCRIBE_INSTANCE_REQ = 67;
-const SYS_PROJECTION_GET_REQ = 68;
-const SYS_PROJECTION_WATCH_REQ = 69;
-
-const STRING_TYPE: TypeDesc = { kind: "scalar", name: "string" };
-const UINT64_TYPE: TypeDesc = { kind: "scalar", name: "uint64" };
-
-const AUTH_REQ_DESC: TypeDesc = { kind: "struct", name: "AuthReq", className: "AuthReq", classId: SYS_AUTH_REQ };
-const AUTH_OK_DESC: TypeDesc = { kind: "struct", name: "AuthOk", className: "AuthOk", classId: SYS_AUTH_OK };
-const EVENT_SUBSCRIBE_SERVICE_REQ_DESC: TypeDesc = {
-  kind: "struct", name: "eventSubscribeServiceReq", className: "eventSubscribeServiceReq", classId: SYS_EVENT_SUBSCRIBE_SERVICE_REQ,
-};
-const EVENT_SUBSCRIBE_INSTANCE_REQ_DESC: TypeDesc = {
-  kind: "struct", name: "eventSubscribeInstanceReq", className: "eventSubscribeInstanceReq", classId: SYS_EVENT_SUBSCRIBE_INSTANCE_REQ,
-};
-const PROJECTION_GET_REQ_DESC: TypeDesc = {
-  kind: "struct", name: "projectionGetReq", className: "projectionGetReq", classId: SYS_PROJECTION_GET_REQ,
-};
-const PROJECTION_WATCH_REQ_DESC: TypeDesc = {
-  kind: "struct", name: "projectionWatchReq", className: "projectionWatchReq", classId: SYS_PROJECTION_WATCH_REQ,
-};
-
-const AUTH_REQ_OBJECT: ObjectDesc = {
-  kind: "struct", name: "AuthReq",
-  fields: [{ name: "Token", type: STRING_TYPE }],
-};
-const AUTH_OK_OBJECT: ObjectDesc = {
-  kind: "struct", name: "AuthOk",
-  fields: [{ name: "Manifest", type: STRING_TYPE }],
-};
-const EVENT_SUBSCRIBE_SERVICE_REQ_OBJECT: ObjectDesc = {
-  kind: "struct", name: "eventSubscribeServiceReq",
-  fields: [
-    { name: "serviceName", type: STRING_TYPE },
-    { name: "kind", type: STRING_TYPE },
-  ],
-};
-const EVENT_SUBSCRIBE_INSTANCE_REQ_OBJECT: ObjectDesc = {
-  kind: "struct", name: "eventSubscribeInstanceReq",
-  fields: [
-    { name: "actorId", type: STRING_TYPE },
-    { name: "kind", type: STRING_TYPE },
-  ],
-};
-const PROJECTION_GET_REQ_OBJECT: ObjectDesc = {
-  kind: "struct", name: "projectionGetReq",
-  fields: [
-    { name: "actorPath", type: STRING_TYPE },
-    { name: "component", type: STRING_TYPE },
-    { name: "schemaId", type: UINT64_TYPE },
-  ],
-};
-const PROJECTION_WATCH_REQ_OBJECT: ObjectDesc = {
-  kind: "struct", name: "projectionWatchReq",
-  fields: [
-    { name: "actorPath", type: STRING_TYPE },
-    { name: "component", type: STRING_TYPE },
-    { name: "schemaId", type: UINT64_TYPE },
-  ],
-};
+/* Generated from gospore schema/builtin.go — single source of truth   */
+/* shared with the Go gateway. Regenerate via                          */
+/*   go test ./internal/wiregen -update                                */
+import {
+  SYS_AUTH_REQ,
+  SYS_AUTH_OK,
+  SYS_EVENT_SUBSCRIBE_SERVICE_REQ,
+  SYS_EVENT_SUBSCRIBE_INSTANCE_REQ,
+  SYS_PROJECTION_GET_REQ,
+  SYS_PROJECTION_WATCH_REQ,
+  AUTH_REQ_DESC,
+  AUTH_OK_DESC,
+  EVENT_SUBSCRIBE_SERVICE_REQ_DESC,
+  EVENT_SUBSCRIBE_INSTANCE_REQ_DESC,
+  PROJECTION_GET_REQ_DESC,
+  PROJECTION_WATCH_REQ_DESC,
+  AUTH_REQ_OBJECT,
+  AUTH_OK_OBJECT,
+  EVENT_SUBSCRIBE_SERVICE_REQ_OBJECT,
+  EVENT_SUBSCRIBE_INSTANCE_REQ_OBJECT,
+  PROJECTION_GET_REQ_OBJECT,
+  PROJECTION_WATCH_REQ_OBJECT,
+} from "./generated/system_protocol.js";
 
 const sysObjectFor = (classId: number): ((name: string) => ObjectDesc | undefined) => {
   const map = new Map<string, ObjectDesc>();
