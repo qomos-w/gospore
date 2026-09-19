@@ -476,31 +476,55 @@ func TestEventStatsCallable_ReportsRingEvictions(t *testing.T) {
 		t.Fatal("root actor did not register events")
 	}
 
-	// Push straight into the retention store (what Cell.emitLifecycleEvent
-	// / emitCallableEvent do once a subscriber exists). Capacity 2; three
-	// records evict the first.
+	// Always-write means every invoke (including the stats call itself,
+	// which targets root) writes invoke records into root's ring —
+	// reading root's own ring is self-referential. Pin the eviction
+	// contract on a detached actor ID nobody invokes: three pushes into
+	// a capacity-2 ring evict exactly one.
 	impl := app.(*appImpl)
-	rootID := impl.Self().ID()
-	for i := 0; i < 3; i++ {
-		impl.eventsStore.Push(rootID, events.Record{Kind: actor.WatchStarted})
+	root := app.Self()
+	fakeID, err := id.Parse("03000000000000000000000000000003")
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	root := app.Self()
-	call := root.Invoke(context.Background(), eventStatsCallID, eventStatsReq{})
-	v, err := call.Final(context.Background())
-	call.Close()
-	if err != nil {
-		t.Fatalf("stats: %v", err)
+	stats := func() eventStatsResp {
+		call := root.Invoke(context.Background(), eventStatsCallID, eventStatsReq{})
+		v, err := call.Final(context.Background())
+		call.Close()
+		if err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+		resp, ok := v.(eventStatsResp)
+		if !ok {
+			t.Fatalf("stats type = %T", v)
+		}
+		for _, r := range resp.Rings {
+			if r.ActorID == fakeID.String() {
+				return resp
+			}
+		}
+		return resp
 	}
-	resp, ok := v.(eventStatsResp)
-	if !ok {
-		t.Fatalf("stats type = %T", v)
+
+	stats() // drain any earlier state; fakeID has no ring yet
+
+	for i := 0; i < 3; i++ {
+		impl.eventsStore.Push(fakeID, events.Record{Kind: actor.WatchStarted})
 	}
-	if len(resp.Rings) == 0 {
-		t.Fatalf("rings empty despite 3 pushes into capacity-2 ring: %+v", resp.Rings)
+
+	resp := stats()
+	var r eventStatsRing
+	found := false
+	for _, e := range resp.Rings {
+		if e.ActorID == fakeID.String() {
+			r, found = e, true
+		}
 	}
-	r := resp.Rings[0]
-	if r.Evicted != 1 || r.Capacity != 2 || r.Len != 2 || r.ActorID != rootID.String() {
+	if !found {
+		t.Fatalf("no ring entry for the detached actor despite 3 pushes into capacity-2 ring: %+v", resp.Rings)
+	}
+	if r.Evicted != 1 || r.Capacity != 2 || r.Len != 2 {
 		t.Fatalf("ring entry = %+v", r)
 	}
 }

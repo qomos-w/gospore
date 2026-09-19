@@ -12,6 +12,7 @@ import (
 	"github.com/qomos-w/gospore/actor"
 	"github.com/qomos-w/gospore/codec"
 	"github.com/qomos-w/gospore/discovery"
+	"github.com/qomos-w/gospore/events"
 	"github.com/qomos-w/gospore/id"
 	"github.com/qomos-w/gospore/internal/handler"
 	"github.com/qomos-w/gospore/invoke"
@@ -349,6 +350,18 @@ func (c *startContext) EmitEvent(kind string, payload any) error {
 		c.cell.logger.Debug("eventbus: EmitEvent", "routingKey", key, "kind", kind, "actorId", actorID)
 	}
 	c.cell.eventBus.Publish(key, kind, c.cell.services, payload)
+
+	// Ring history: the §4.23 retention contract requires the ring to
+	// hold recent activity regardless of live subscribers. Payload
+	// travels on the bus; the ring records the metadata (kind name).
+	if c.cell.events != nil && c.cell.self != nil {
+		c.cell.events.Push(c.cell.self.ID(), events.Record{
+			Kind:      actor.WatchUserEvent,
+			Event:     kind,
+			Timestamp: c.cell.now(),
+			ActorID:   c.cell.self.ID(),
+		})
+	}
 	return nil
 }
 

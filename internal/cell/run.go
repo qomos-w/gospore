@@ -39,11 +39,29 @@ const ownerQueueCapacity = 256
 func (c *Cell) Run(ctx context.Context) {
 	defer close(c.done)
 	runCtx, runCancel := context.WithCancel(ctx)
-	c.runCancel = runCancel
+	c.setRunCancel(runCancel)
 	c.openIngressLoops()
 	<-runCtx.Done()
 	c.draining.Store(true)
 	c.drainIngressLoops()
+}
+
+// setRunCancel/getRunCancel serialize access to runCancel across the Run
+// goroutine and the system lane (handleIdle/handleDestroy call it while
+// Run may still be writing it during startup, or restarting).
+func (c *Cell) setRunCancel(fn context.CancelFunc) {
+	c.cancelMu.Lock()
+	c.runCancel = fn
+	c.cancelMu.Unlock()
+}
+
+func (c *Cell) callRunCancel() {
+	c.cancelMu.Lock()
+	fn := c.runCancel
+	c.cancelMu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // Recv is the unified message entry point. Called directly by the transport
@@ -707,8 +725,19 @@ func (c *Cell) handleStart() {
 	// Start the owner loop only after OnStart has fully reconstructed state.
 	// Messages enqueued during OnStart wait in ownerQ until now, so stateful
 	// handlers never race startup.
-	c.ownerWG.Add(1)
-	go c.ownerLoop()
+	//
+	// The Add/go happen under ownerQMu with an ownerQClosed re-check: Run's
+	// drain may already have closed+niled ownerQ when ctx was cancelled
+	// during boot — spawning then would race drain's ownerWG.Wait (illegal
+	// Add-after-Wait) and leave an ownerLoop ranging a nil channel forever.
+	c.ownerQMu.Lock()
+	if !c.ownerQClosed {
+		c.ownerWG.Add(1)
+		c.ownerQMu.Unlock()
+		go c.ownerLoop()
+	} else {
+		c.ownerQMu.Unlock()
+	}
 }
 
 func (c *Cell) handleIdle() {
@@ -720,9 +749,7 @@ func (c *Cell) handleIdle() {
 	if c.cancelLifecycle != nil {
 		c.cancelLifecycle()
 	}
-	if c.runCancel != nil {
-		c.runCancel()
-	}
+	c.callRunCancel()
 	// If Run() has already started draining (ctx cancelled), skip queue
 	// operations. drainIngressLoops handles all cleanup; we just need to
 	// record the state transition and call OnStop.
@@ -830,9 +857,7 @@ func (c *Cell) handleRestart(ctx context.Context, m mailbox.Restart) {
 	if c.cancelLifecycle != nil {
 		c.cancelLifecycle()
 	}
-	if c.runCancel != nil {
-		c.runCancel()
-	}
+	c.callRunCancel()
 	_ = c.actor.OnStop(newStopContext(c))
 
 	if fn := c.props.Factory(); fn != nil {
@@ -1274,7 +1299,7 @@ func (c *Cell) now() time.Time {
 }
 
 func (c *Cell) emitLifecycleEvent(kind actor.WatchKind) {
-	if c.events == nil || !c.events.HasSubscribers(c.self.ID()) {
+	if c.events == nil {
 		return
 	}
 	c.events.Push(c.self.ID(), events.Record{
@@ -1285,7 +1310,7 @@ func (c *Cell) emitLifecycleEvent(kind actor.WatchKind) {
 }
 
 func (c *Cell) emitCallableEvent(kind actor.WatchKind, inv *handler.Invoker, env mailbox.Envelope, errorMsg string) {
-	if c.events == nil || inv == nil || !c.events.HasSubscribers(c.self.ID()) {
+	if c.events == nil || inv == nil {
 		return
 	}
 	rec := events.Record{

@@ -43,6 +43,9 @@ type Record struct {
 	Caller   id.ActorID
 	Target   id.ActorID
 	CallID   string
+	// Event carries the registered event-kind name for WatchUserEvent
+	// records (ctx.EmitEvent). Empty for watch/invoke records.
+	Event    string
 	SchemaNS string
 	SchemaID uint32
 	CorID    uint64

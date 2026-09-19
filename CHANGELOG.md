@@ -49,6 +49,9 @@
 
 ### Changed
 
+- **Events ring always-write** (user decision): lifecycle and callable records land in the ring during subscriber-free periods (gap replay across idle windows now works), and `ctx.EmitEvent` records a `WatchUserEvent` entry carrying the registered kind name (payload stays on the bus). New `actor.WatchUserEvent` kind + `events.Record.Event` field; `ValidWatchKind` now enumerates 12 kinds. A `RingStats`/`events.stats` `Evicted` audit is the compensating control for chatty actors.
+- **Cell boot-drain data race fixed** (`TestSpawnInheritsParentRole` under `-race`): `handleStart` could `ownerWG.Add` + spawn `ownerLoop` after an immediately-cancelled `Run` had already drained (illegal Add-after-Wait; orphaned loop ranging a nil channel). The spawn now re-checks `ownerQClosed` under `ownerQMu`; `runCancel` access is mutex-guarded across the Run goroutine and the system lane. Pre-existing race, probability-shifted into view by always-write timing.
+
 - `gateway/ws.go` (767 lines) split into `ws_frame.go` (protocol conversion, TBC sniffing, auth codec), `ws_frame_conn.go` (connection machinery: tuning, outCh/overflow, deadlines, drain) and the 67-line upgrade entrypoint — pure code movement, no behavior change.
 - ARCHITECTURE.md reconciled with the above (new §7.6 WS lifecycle,
   §4.22 ring contract + known `HasSubscribers` deviation documented,

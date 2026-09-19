@@ -51,18 +51,26 @@ const (
 	// background work halted but actor still in tree).
 	WatchStopped
 
+	// WatchUserEvent marks Records produced by ctx.EmitEvent (registered
+	// event kinds). The Record's Event field carries the registered kind
+	// name; the payload itself travels on the event bus — the ring keeps
+	// metadata history, mirroring how invoke records store CallID but
+	// not arguments.
+	WatchUserEvent
+
 	// WatchAll subscribes to every Kind.
 	WatchAll WatchKind = -1
 )
 
-// ValidWatchKind reports whether k is one of the 11 enumerated single-bit
+// ValidWatchKind reports whether k is one of the 12 enumerated single-bit
 // Kind constants (WatchTerminated / WatchStarted / WatchRestarted /
 // WatchInvokeIn{Started,Ended,Panicked} / WatchInvokeOut{Started,Ended,
-// Cancelled} / WatchChild{Spawned,Terminated}). The predicate intentionally
-// rejects WatchAll, the zero value, and OR'd combinations of bits — it is
-// the per-entry check the events.Store applies to each element of the
-// `kinds []WatchKind` argument of Subscribe / Recent (and that
-// Context.Watch's variadic form applies entry-by-entry).
+// Cancelled} / WatchChild{Spawned,Terminated} / WatchUserEvent). The
+// predicate intentionally rejects WatchAll, the zero value, and OR'd
+// combinations of bits — it is the per-entry check the events.Store
+// applies to each element of the `kinds []WatchKind` argument of
+// Subscribe / Recent (and that Context.Watch's variadic form applies
+// entry-by-entry).
 //
 // Mismatches map to the gospore.events.invalid_kinds diagnostic so a
 // caller passing an unknown bit pattern fails at the boundary instead of
@@ -72,7 +80,7 @@ func ValidWatchKind(k WatchKind) bool {
 	case WatchTerminated, WatchStarted, WatchRestarted,
 		WatchInvokeInStarted, WatchInvokeInEnded, WatchInvokeInPanicked,
 		WatchInvokeOutStarted, WatchInvokeOutEnded, WatchInvokeOutCancelled,
-		WatchChildSpawned, WatchChildTerminated, WatchStopped:
+		WatchChildSpawned, WatchChildTerminated, WatchStopped, WatchUserEvent:
 		return true
 	}
 	return false

@@ -110,7 +110,11 @@ type Cell struct {
 	scriptRuntime             *scriptRuntimeOwner
 	lifecycleCtx              context.Context
 	cancelLifecycle           context.CancelFunc
-	runCancel                 context.CancelFunc // cancels Cell.Run's ctx so it exits during Destroy
+	// runCancel cancels Cell.Run's ctx so it exits during Destroy.
+	// Written by the Run goroutine, read by the system lane (handleIdle /
+	// handleDestroy) — guard with cancelMu.
+	runCancel                 context.CancelFunc
+	cancelMu                  sync.Mutex
 	spawn                     func(parent ref.Ref, props actor.Props, name string) (ref.Ref, error)
 	plannerInvoke             func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call
 	stop                      func(target ref.Ref) error
