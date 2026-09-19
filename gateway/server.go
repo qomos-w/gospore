@@ -88,6 +88,57 @@ type Server struct {
 	// gateSeq uniquifies gatesession child names across every connection
 	// this Server accepts (ws sessions, SSE, per-request unary HTTP).
 	gateSeq atomic.Uint64
+
+	wsTimeouts WSTimeouts
+}
+
+// WSTimeouts exposes the WebSocket connection tuning knobs at the Server
+// level. The zero value selects the package defaults for every field, so
+// callers set only what they need. Values are applied per accepted
+// connection at upgrade time.
+type WSTimeouts struct {
+	// PingInterval is how often the server pings the peer.
+	// Default 30s.
+	PingInterval time.Duration
+	// ReadIdle bounds how long the server waits for any peer message
+	// (data frame or pong) before dropping the connection. Default 65s;
+	// must comfortably exceed PingInterval.
+	ReadIdle time.Duration
+	// WriteTimeout bounds each outbound data write. Default 30s.
+	WriteTimeout time.Duration
+	// PingWriteTimeout bounds each ping control write. Default 5s.
+	PingWriteTimeout time.Duration
+	// StallForceClose is the no-progress horizon after which a wedged
+	// writer is force-closed. Default 10m.
+	StallForceClose time.Duration
+	// CloseDrainTimeout bounds how long Close waits for queued frames to
+	// flush before force-closing the raw conn. Default 5s.
+	CloseDrainTimeout time.Duration
+	// OverflowBudgetBytes bounds the overflow queue for frames buffered
+	// while the peer cannot accept writes. Default 32 MiB.
+	OverflowBudgetBytes int
+	// OutChCapacity bounds the fast-path outbound queue. Default 64.
+	OutChCapacity int
+}
+
+// SetWSTimeouts installs WebSocket connection tuning. Zero fields fall
+// back to package defaults. Must be called before Run; later changes
+// affect only connections accepted afterwards.
+func (s *Server) SetWSTimeouts(t WSTimeouts) {
+	s.wsTimeouts = t
+}
+
+func (t WSTimeouts) tuning() wsConnTuning {
+	return wsConnTuning{
+		stallForceClose:  t.StallForceClose,
+		closeDrainWait:   t.CloseDrainTimeout,
+		overflowBudget:   t.OverflowBudgetBytes,
+		outChCapacity:    t.OutChCapacity,
+		pingInterval:     t.PingInterval,
+		readIdle:         t.ReadIdle,
+		writeTimeout:     t.WriteTimeout,
+		pingWriteTimeout: t.PingWriteTimeout,
+	}
 }
 
 // NewServer creates a Gateway HTTP server bound to addr.

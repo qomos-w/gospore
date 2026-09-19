@@ -133,6 +133,18 @@ type eventStatsSub struct {
 
 type eventStatsResp struct {
 	Subscriptions []eventStatsSub `json:"subscriptions"`
+	// Rings lists retention rings that have evicted history
+	// (evicted > 0), most-loss first. Silent ring overflow previously
+	// surfaced only as subscriber gap markers; this makes the loss
+	// itself queryable.
+	Rings []eventStatsRing `json:"rings"`
+}
+
+type eventStatsRing struct {
+	ActorID  string `json:"actorId"`
+	Len      int    `json:"len"`
+	Capacity int    `json:"capacity"`
+	Evicted  uint64 `json:"evicted"`
 }
 
 // handleEventStats serves gospore.events.stats: a point-in-time snapshot of
@@ -158,7 +170,19 @@ func (a *appImpl) handleEventStats(_ actor.PureContext, _ eventStatsReq) (eventS
 			Created: s.Created.UTC().Format(time.RFC3339Nano),
 		})
 	}
-	return eventStatsResp{Subscriptions: out}, nil
+	rings := make([]eventStatsRing, 0)
+	for _, rs := range a.eventsStore.RingStats() {
+		if rs.Evicted == 0 {
+			continue
+		}
+		rings = append(rings, eventStatsRing{
+			ActorID:  rs.ActorID.String(),
+			Len:      rs.Len,
+			Capacity: rs.Capacity,
+			Evicted:  rs.Evicted,
+		})
+	}
+	return eventStatsResp{Subscriptions: out, Rings: rings}, nil
 }
 
 // drainSubscription pumps events from sub to emit until ctx or emit signals done.

@@ -38,6 +38,7 @@ type Ring struct {
 	count    int    // number of records held (0..capacity)
 	latest   uint64 // SeqNo of the most recently pushed record (0 if empty)
 	oldest   uint64 // SeqNo of the oldest still-held record (0 if empty)
+	evicted  uint64 // cumulative records overwritten once the ring filled
 }
 
 // NewRing returns an empty Ring with the given capacity. A capacity of
@@ -89,8 +90,24 @@ func (r *Ring) Push(rec Record) {
 		r.buf[r.head] = rec
 		r.head = (r.head + 1) % r.capacity
 		r.oldest = r.buf[r.head].SeqNo
+		r.evicted++
 	}
 	r.latest = rec.SeqNo
+}
+
+// Evicted returns the cumulative number of Records overwritten after
+// the Ring first filled. Non-zero means history beyond capacity has
+// been silently dropped: Recent/Subscribe callers hitting a gap
+// (sinceSeqNo < OldestSeqNo) lost exactly this many records' worth of
+// context. Monotonic for the lifetime of the Ring; nil receiver
+// returns 0.
+func (r *Ring) Evicted() uint64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.evicted
 }
 
 // Since returns Records with SeqNo strictly greater than sinceSeqNo,

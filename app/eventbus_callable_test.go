@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/qomos-w/gospore/actor"
+	"github.com/qomos-w/gospore/events"
 	"github.com/qomos-w/gospore/id"
 	"github.com/qomos-w/gospore/invoke"
 	"github.com/qomos-w/gospore/ref"
@@ -451,6 +452,57 @@ func TestEventStatsCallable_ListsLiveSubscriptions(t *testing.T) {
 	// subscription. (Close() alone only detaches the caller.)
 	stream.Cancel()
 	waitForSub(0)
+}
+
+func TestEventStatsCallable_ReportsRingEvictions(t *testing.T) {
+	registered := make(chan struct{})
+	app, err := New(
+		WithNamespace("testapp"),
+		WithRuntimeSlot(1),
+		WithEventRingCapacity(2),
+		WithRootActor(func() actor.Actor { return &eventRootActor{registered: registered} }),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = app.Run(ctx) }()
+
+	select {
+	case <-registered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("root actor did not register events")
+	}
+
+	// Push straight into the retention store (what Cell.emitLifecycleEvent
+	// / emitCallableEvent do once a subscriber exists). Capacity 2; three
+	// records evict the first.
+	impl := app.(*appImpl)
+	rootID := impl.Self().ID()
+	for i := 0; i < 3; i++ {
+		impl.eventsStore.Push(rootID, events.Record{Kind: actor.WatchStarted})
+	}
+
+	root := app.Self()
+	call := root.Invoke(context.Background(), eventStatsCallID, eventStatsReq{})
+	v, err := call.Final(context.Background())
+	call.Close()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	resp, ok := v.(eventStatsResp)
+	if !ok {
+		t.Fatalf("stats type = %T", v)
+	}
+	if len(resp.Rings) == 0 {
+		t.Fatalf("rings empty despite 3 pushes into capacity-2 ring: %+v", resp.Rings)
+	}
+	r := resp.Rings[0]
+	if r.Evicted != 1 || r.Capacity != 2 || r.Len != 2 || r.ActorID != rootID.String() {
+		t.Fatalf("ring entry = %+v", r)
+	}
 }
 
 var _ invoke.CallMode

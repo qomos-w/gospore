@@ -35,15 +35,31 @@ type HTTP struct {
 	closed bool
 }
 
+// DefaultInboundCapacity is the inbound frame buffer used by NewHTTP
+// and NewMemoryRemotePair when no explicit capacity is given.
+const DefaultInboundCapacity = 64
+
 // NewHTTP creates an HTTP transport that listens on an ephemeral
-// local port. targetURL is the peer endpoint (e.g. "http://127.0.0.1:8081");
+// local port with the DefaultInboundCapacity (64) inbound buffer.
+// targetURL is the peer endpoint (e.g. "http://127.0.0.1:8081");
 // it may be empty if the peer address is not yet known — call
 // SetTargetURL before the first Send.
 func NewHTTP(targetURL string) (*HTTP, error) {
+	return NewHTTPWithBuffer(targetURL, DefaultInboundCapacity)
+}
+
+// NewHTTPWithBuffer creates an HTTP transport with an explicit inbound
+// frame buffer capacity. The buffer bounds backpressure: once full,
+// inbound POSTs are rejected with 503 until the consumer drains
+// Receive(). Capacity <= 0 falls back to DefaultInboundCapacity.
+func NewHTTPWithBuffer(targetURL string, inboundCapacity int) (*HTTP, error) {
+	if inboundCapacity <= 0 {
+		inboundCapacity = DefaultInboundCapacity
+	}
 	h := &HTTP{
 		targetURL: targetURL,
 		client:    &http.Client{},
-		inbound:   make(chan message.Frame, 64),
+		inbound:   make(chan message.Frame, inboundCapacity),
 	}
 
 	mux := http.NewServeMux()

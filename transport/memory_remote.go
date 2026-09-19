@@ -28,11 +28,22 @@ type MemoryRemote struct {
 }
 
 // NewMemoryRemotePair creates two MemoryRemotes that are wired to
-// each other: sending on A delivers to B's Receive channel, and
-// vice versa.
+// each other with DefaultInboundCapacity (64) buffers: sending on A
+// delivers to B's Receive channel, and vice versa.
 func NewMemoryRemotePair() (a, b *MemoryRemote) {
-	aToB := make(chan message.Frame, 64)
-	bToA := make(chan message.Frame, 64)
+	return NewMemoryRemotePairWithBuffer(DefaultInboundCapacity)
+}
+
+// NewMemoryRemotePairWithBuffer creates a MemoryRemote pair with an
+// explicit per-direction buffer capacity. Once a direction's buffer
+// is full, Send on that direction errors until the peer drains.
+// Capacity <= 0 falls back to DefaultInboundCapacity.
+func NewMemoryRemotePairWithBuffer(buffer int) (a, b *MemoryRemote) {
+	if buffer <= 0 {
+		buffer = DefaultInboundCapacity
+	}
+	aToB := make(chan message.Frame, buffer)
+	bToA := make(chan message.Frame, buffer)
 
 	a = &MemoryRemote{
 		outbound: aToB,

@@ -293,6 +293,7 @@ func New(opts ...Option) (App, error) {
 		srv := gateway.NewServer(a, cfg.gatewayInterceptor, cfg.gatewayAddr)
 		srv.SetStaticFS(cfg.staticFS)
 		srv.SetLogger(cfg.logger)
+		srv.SetWSTimeouts(cfg.gatewayWSTimeouts)
 		if cfg.binaryOnly {
 			srv.WithBinaryOnly(true)
 		}
@@ -1549,6 +1550,7 @@ type config struct {
 	gatewayAddr          string
 	gatewayExtraAddrs    []string
 	gatewayInterceptor   gateway.GatewayInterceptor
+	gatewayWSTimeouts    gateway.WSTimeouts
 	urlAuth              gateway.URLAuth
 	logProvider          gateway.LogProvider
 	extraRoutes          func(mux *http.ServeMux)
@@ -1748,6 +1750,17 @@ func WithGatewayHTTP(addr string, interceptor gateway.GatewayInterceptor) Option
 		} else {
 			c.gatewayInterceptor = interceptor
 		}
+	}
+}
+
+// WithGatewayWSTimeouts tunes the WebSocket connection timeouts of the
+// HTTP gateway (ping cadence, read-idle, write deadlines, stall horizon,
+// close drain, overflow budget, outbound queue capacity). The zero
+// value keeps package defaults; see gateway.WSTimeouts. Only meaningful
+// together with WithGatewayHTTP.
+func WithGatewayWSTimeouts(t gateway.WSTimeouts) Option {
+	return func(c *config) {
+		c.gatewayWSTimeouts = t
 	}
 }
 

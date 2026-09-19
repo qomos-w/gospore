@@ -413,16 +413,14 @@ func (t *tree) RegisterScopedService(owner ref.Ref, name string, target ref.Ref)
 	if _, ok := t.byID[owner.ID()]; !ok {
 		return ErrUnknownTarget
 	}
-	if t.anyGlobalService(name) {
-		return service.ErrScopedConflict
+	_, ownerHasName := t.scopedServices[owner][name]
+	if err := service.ScopedRegistrationError(t.anyGlobalService(name), ownerHasName); err != nil {
+		return err
 	}
 	m, ok := t.scopedServices[owner]
 	if !ok {
 		m = make(map[string]ref.Ref)
 		t.scopedServices[owner] = m
-	}
-	if _, exists := m[name]; exists {
-		return service.ErrScopedConflict
 	}
 	m[name] = target
 	return nil
@@ -483,16 +481,19 @@ func (t *tree) RegisterGlobalService(owner ref.Ref, name string, target ref.Ref)
 	if _, ok := t.byID[owner.ID()]; !ok {
 		return ErrUnknownTarget
 	}
+	takenBySelf, takenByOther := false, false
 	for o, names := range t.globalServices {
 		if names.Has(name) {
 			if o == owner {
-				return nil
+				takenBySelf = true
+			} else {
+				takenByOther = true
 			}
-			return service.ErrServiceNameTaken
+			break
 		}
 	}
-	if t.anyScopedService(name) {
-		return service.ErrScopedConflict
+	if err := service.GlobalRegistrationError(takenBySelf, takenByOther, t.anyScopedService(name)); err != nil {
+		return err
 	}
 	m, ok := t.globalServices[owner]
 	if !ok {

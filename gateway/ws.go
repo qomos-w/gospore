@@ -233,6 +233,18 @@ const (
 	// (sess.send → conn.Close) hostage, so past this budget the drain is
 	// abandoned and the raw conn is closed to unwedge the writer.
 	wsCloseDrainTimeout = 5 * time.Second
+
+	// wsPingInterval is how often pingLoop sends a WebSocket ping.
+	wsPingInterval = 30 * time.Second
+
+	// wsReadIdleTimeout bounds how long the server waits for the next peer
+	// message (data frame or pong) before declaring the connection dead.
+	// It must exceed wsPingInterval by a comfortable margin so a live but
+	// quiet client (one that only answers pings) is not dropped.
+	wsReadIdleTimeout = 65 * time.Second
+
+	// wsPingWriteTimeout bounds each ping control write.
+	wsPingWriteTimeout = 5 * time.Second
 )
 
 // wsFrameConn adapts a gorilla *websocket.Conn to the FrameConn interface.
@@ -264,9 +276,13 @@ type wsFrameConn struct {
 	overflowBytes int
 
 	// Tuning knobs; zero values resolve to the package defaults.
-	stallForceClose time.Duration
-	closeDrainWait  time.Duration
-	overflowBudget  int
+	stallForceClose  time.Duration
+	closeDrainWait   time.Duration
+	overflowBudget   int
+	pingInterval     time.Duration
+	readIdle         time.Duration
+	writeTimeout     time.Duration
+	pingWriteTimeout time.Duration
 
 	closeOnce sync.Once
 }
@@ -289,9 +305,24 @@ type wsConnTuning struct {
 	stallForceClose time.Duration
 	closeDrainWait  time.Duration
 	overflowBudget  int
+
+	// outChCapacity bounds the fast-path queue consumed by writeLoop.
+	outChCapacity int
+	// pingInterval is how often pingLoop sends a WebSocket ping.
+	pingInterval time.Duration
+	// readIdle bounds how long Recv waits for the next peer message
+	// (also refreshed by pongs). Should exceed pingInterval by a
+	// comfortable margin so a live-but-quiet client is not dropped.
+	readIdle time.Duration
+	// writeTimeout bounds each outbound data write.
+	writeTimeout time.Duration
+	// pingWriteTimeout bounds each ping control write.
+	pingWriteTimeout time.Duration
 }
 
-func newWsFrameConnTuned(conn *websocket.Conn, logger actor.Logger, binaryOnly bool, t wsConnTuning) *wsFrameConn {
+// resolve fills zero tuning fields with the package defaults and returns
+// the effective values used by the connection.
+func (t wsConnTuning) resolve() wsConnTuning {
 	if t.stallForceClose <= 0 {
 		t.stallForceClose = wsStallForceClose
 	}
@@ -301,16 +332,40 @@ func newWsFrameConnTuned(conn *websocket.Conn, logger actor.Logger, binaryOnly b
 	if t.overflowBudget <= 0 {
 		t.overflowBudget = wsOverflowBudget
 	}
+	if t.outChCapacity <= 0 {
+		t.outChCapacity = wsOutChCapacity
+	}
+	if t.pingInterval <= 0 {
+		t.pingInterval = wsPingInterval
+	}
+	if t.readIdle <= 0 {
+		t.readIdle = wsReadIdleTimeout
+	}
+	if t.writeTimeout <= 0 {
+		t.writeTimeout = wsWriteTimeout
+	}
+	if t.pingWriteTimeout <= 0 {
+		t.pingWriteTimeout = wsPingWriteTimeout
+	}
+	return t
+}
+
+func newWsFrameConnTuned(conn *websocket.Conn, logger actor.Logger, binaryOnly bool, t wsConnTuning) *wsFrameConn {
+	t = t.resolve()
 	c := &wsFrameConn{
-		conn:            conn,
-		logger:          logger,
-		binaryOnly:      binaryOnly,
-		outCh:           make(chan wsOutbound, wsOutChCapacity),
-		closed:          make(chan struct{}),
-		writeDone:       make(chan struct{}),
-		stallForceClose: t.stallForceClose,
-		closeDrainWait:  t.closeDrainWait,
-		overflowBudget:  t.overflowBudget,
+		conn:             conn,
+		logger:           logger,
+		binaryOnly:       binaryOnly,
+		outCh:            make(chan wsOutbound, t.outChCapacity),
+		closed:           make(chan struct{}),
+		writeDone:        make(chan struct{}),
+		stallForceClose:  t.stallForceClose,
+		closeDrainWait:   t.closeDrainWait,
+		overflowBudget:   t.overflowBudget,
+		pingInterval:     t.pingInterval,
+		readIdle:         t.readIdle,
+		writeTimeout:     t.writeTimeout,
+		pingWriteTimeout: t.pingWriteTimeout,
 	}
 	go c.writeLoop()
 	go c.pingLoop()
@@ -318,7 +373,7 @@ func newWsFrameConnTuned(conn *websocket.Conn, logger actor.Logger, binaryOnly b
 }
 
 func (c *wsFrameConn) pingLoop() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(c.pingInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -326,9 +381,18 @@ func (c *wsFrameConn) pingLoop() {
 			return
 		case <-ticker.C:
 			c.writeMu.Lock()
-			err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+			err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(c.pingWriteTimeout))
 			c.writeMu.Unlock()
 			if err != nil {
+				// A ping control write failing within its deadline means
+				// the peer cannot accept even control frames — the conn is
+				// dead, not slow. Tear down instead of silently retiring
+				// this loop and leaving the session to trip the (much
+				// longer) read-idle deadline.
+				if c.logger != nil {
+					c.logger.Warn("gateway: ws ping write failed; force-closing", "err", err)
+				}
+				c.signalClose()
 				return
 			}
 		}
@@ -337,7 +401,7 @@ func (c *wsFrameConn) pingLoop() {
 
 // Recv reads the next WebSocket message and returns it as a WireFrame.
 func (c *wsFrameConn) Recv() (*WireFrame, error) {
-	c.conn.SetReadDeadline(time.Now().Add(65 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(c.readIdle))
 
 	mt, msg, err := c.conn.ReadMessage()
 	if err != nil {
@@ -376,11 +440,12 @@ func (c *wsFrameConn) Recv() (*WireFrame, error) {
 	return wire, nil
 }
 
-// wsWriteTimeout bounds each outbound data write performed by writeLoop. The
-// deadline constrains only the writer goroutine — Send never touches the
-// socket — so a client whose TCP window is closed stalls its own writeLoop
-// for at most this long before the write fails and the connection is torn
-// down.
+// wsWriteTimeout is the default bound for each outbound data write performed
+// by writeLoop (overridable per connection via wsConnTuning /
+// gateway.Server WSTimeouts). The deadline constrains only the writer
+// goroutine — Send never touches the socket — so a client whose TCP window
+// is closed stalls its own writeLoop for at most this long before the write
+// fails and the connection is torn down.
 var wsWriteTimeout = 30 * time.Second
 
 // Send marshals a WireFrame and enqueues it for writeLoop. It never blocks
@@ -536,7 +601,7 @@ func (c *wsFrameConn) writeItem(item wsOutbound) bool {
 	ok := c.writeGuard(func() error {
 		c.writeMu.Lock()
 		defer c.writeMu.Unlock()
-		c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+		c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
 		return c.conn.WriteMessage(mt, item.data)
 	})
 	if !ok {
@@ -663,8 +728,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wsTuning := s.wsTimeouts.tuning().resolve()
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(65 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(wsTuning.readIdle))
 		return nil
 	})
 
@@ -690,7 +756,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		urlAuth = s.urlAuth
 	}
 
-	fc := newWsFrameConn(conn, s.logger, s.binaryOnly)
+	fc := newWsFrameConnTuned(conn, s.logger, s.binaryOnly, wsTuning)
 	defer fc.Close()
 	s.ServeSession(r.Context(), fc, SessionOptions{
 		CustomerID: customerID,

@@ -3,6 +3,7 @@ package events
 import (
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 
 	"github.com/qomos-w/gospore/actor"
@@ -133,6 +134,40 @@ func (s *StoreImpl) Subscribe(actorID id.ActorID, sinceSeqNo uint64, kinds []act
 	s.mu.Unlock()
 
 	return sub, nil
+}
+
+// RingStat is one actor's retention-ring snapshot, surfaced via
+// gospore.events.stats so silent history loss (Evicted > 0) is
+// observable instead of only manifesting as subscriber gap markers.
+type RingStat struct {
+	ActorID  id.ActorID
+	Len      int
+	Capacity int
+	Evicted  uint64
+}
+
+// RingStats returns a per-actor snapshot of every retention ring,
+// sorted by Evicted descending (then ActorID ascending) so the actors
+// losing the most history surface first.
+func (s *StoreImpl) RingStats() []RingStat {
+	s.mu.Lock()
+	out := make([]RingStat, 0, len(s.perActor))
+	for actorID, as := range s.perActor {
+		out = append(out, RingStat{
+			ActorID:  actorID,
+			Len:      as.ring.Len(),
+			Capacity: as.ring.Capacity(),
+			Evicted:  as.ring.Evicted(),
+		})
+	}
+	s.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Evicted != out[j].Evicted {
+			return out[i].Evicted > out[j].Evicted
+		}
+		return out[i].ActorID.String() < out[j].ActorID.String()
+	})
+	return out
 }
 
 // HasSubscribers reports whether the actor has any active subscriptions.
