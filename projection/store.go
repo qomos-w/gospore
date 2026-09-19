@@ -13,6 +13,7 @@ package projection
 
 import (
 	"fmt"
+	"strings"
 	"reflect"
 	"time"
 	"unicode"
@@ -175,7 +176,10 @@ func snapshotStruct(v reflect.Value) (FieldSnapshot, error) {
 		if !f.IsExported() {
 			continue
 		}
-		name := lowerFirst(f.Name)
+		name, ok := wireFieldName(f)
+		if !ok {
+			continue
+		}
 		val, err := snapshotValue(v.Field(i))
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", f.Name, err)
@@ -296,7 +300,7 @@ func applyStruct(v reflect.Value, snap FieldSnapshot) error {
 		if !f.IsExported() {
 			continue
 		}
-		value, ok := snap[lowerFirst(f.Name)]
+		value, ok := snap[wireName(f)]
 		if !ok {
 			continue
 		}
@@ -410,4 +414,39 @@ func lowerFirst(s string) string {
 		return s
 	}
 	return string(unicode.ToLower(r)) + s[size:]
+}
+
+// wireName derives the wire key for a struct field on the projection path.
+// A `json` tag (the declared public name shared with the schema and the TS
+// clients) is authoritative; lowerFirst(GoName) is the fallback for untagged
+// fields. lowerFirst(GoName) alone is wrong for generator-emitted acronym
+// fields (`ID` → `iD` while the schema/TS name is `Id`), which silently
+// desynchronizes the frontend from the projection wire.
+func wireName(f reflect.StructField) string {
+	if tag, ok := f.Tag.Lookup("json"); ok {
+		if idx := strings.Index(tag, ","); idx >= 0 {
+			tag = tag[:idx]
+		}
+		if tag != "" && tag != "-" {
+			return tag
+		}
+	}
+	return lowerFirst(f.Name)
+}
+
+// wireFieldName is wireName with skip semantics: json:"-" and unexported
+// fields are excluded from the snapshot entirely.
+func wireFieldName(f reflect.StructField) (string, bool) {
+	if !f.IsExported() {
+		return "", false
+	}
+	if tag, ok := f.Tag.Lookup("json"); ok {
+		if idx := strings.Index(tag, ","); idx >= 0 {
+			tag = tag[:idx]
+		}
+		if tag == "-" {
+			return "", false
+		}
+	}
+	return wireName(f), true
 }
