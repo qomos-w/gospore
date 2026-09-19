@@ -13,6 +13,7 @@ import {
   type FrameConnectionState,
 } from "./frame_transport.js";
 import type { SchemaRegistryLike, BinaryCodecLike } from "./schema.js";
+import type { TransIdGapInfo } from "./frame_transport.js";
 
 /* ------------------------------------------------------------------ */
 /* WebSocketLike — kept for backward compatibility with test mocks      */
@@ -165,6 +166,11 @@ export interface WebSocketTransportOptions {
   binaryOnly?: boolean;
   schemaRegistry?: SchemaRegistryLike;
   binaryCodec?: BinaryCodecLike;
+  /** See ManagedFrameTransportOptions.gapPolicy (default "close"). */
+  gapPolicy?: "close" | "tolerate";
+  /** See ManagedFrameTransportOptions.onTransIdGap. */
+  onTransIdGap?: (info: TransIdGapInfo) => void;
+  transportTag?: string;
 }
 
 export class WebSocketTransport extends ManagedFrameTransport {

@@ -104,6 +104,21 @@ export interface ManagedFrameTransportOptions {
    *  a reconnect would not recover the lost frames either, and the
    *  resubscribe storm it triggers is worse than the gap. */
   gapPolicy?: "close" | "tolerate";
+  /** Observability hook for transId gaps, fired on every skip/duplicate
+   *  regardless of gapPolicy. The same counters are exposed via
+   *  ManagedFrameTransport.gapStats(). Use this to quantify channel loss
+   *  rate on tolerate-mode transports and decide when a reliable channel
+   *  (WS) is needed for a stream. */
+  onTransIdGap?: (info: TransIdGapInfo) => void;
+}
+
+/** Snapshot of one transId sequence break. */
+export interface TransIdGapInfo {
+  kind: TransIdGapKind;
+  got: bigint;
+  expected: bigint;
+  /** Frames lost in this skip (0 for duplicates). */
+  lost: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,6 +156,10 @@ export class ManagedFrameTransport implements ManagedTransport {
   private onError?: (err: Error) => void;
   private onReconnecting?: () => void;
   private gapPolicy: "close" | "tolerate";
+  private onTransIdGapHook?: (info: TransIdGapInfo) => void;
+  private gapSkipCount = 0;
+  private gapDuplicateCount = 0;
+  private gapLostFrames = 0;
 
   private onlineHandler: (() => void) | null = null;
   private visibilityHandler: (() => void) | null = null;
@@ -171,6 +190,7 @@ export class ManagedFrameTransport implements ManagedTransport {
     this.onError = options.onError;
     this.onReconnecting = options.onReconnecting;
     this.gapPolicy = options.gapPolicy ?? "close";
+    this.onTransIdGapHook = options.onTransIdGap;
     this.binaryOnly = options.binaryOnly ?? false;
     this.useBinary = this.binaryOnly ? true : (options.useBinary ?? true);
     this.schemaRegistry = options.schemaRegistry;
@@ -700,6 +720,14 @@ export class ManagedFrameTransport implements ManagedTransport {
   }
 
   private handleTransIdGap(kind: TransIdGapKind, got: bigint, expected: bigint): TransIdGapVerdict {
+    const lost = kind === "skip" ? Number(got - expected) : 0;
+    if (kind === "skip") {
+      this.gapSkipCount += 1;
+      this.gapLostFrames += lost;
+    } else {
+      this.gapDuplicateCount += 1;
+    }
+    this.onTransIdGapHook?.({ kind, got, expected, lost });
     if (this.gapPolicy === "tolerate") {
       if (kind === "duplicate") {
         console.warn(`[${this.transportTag}] duplicate transId ${got} (expected ${expected}); dropping frame`);
@@ -711,6 +739,17 @@ export class ManagedFrameTransport implements ManagedTransport {
     console.warn(`[${this.transportTag}] transId gap detected: got ${got}, expected ${expected}; closing connection`);
     this.connection.close(4001, "transId gap");
     return "close";
+  }
+
+  /** Cumulative transId gap counters for this transport instance
+   *  (across reconnects — the channel's loss rate is the property being
+   *  measured, not one connection's). */
+  gapStats(): { skips: number; duplicates: number; lostFrames: number } {
+    return {
+      skips: this.gapSkipCount,
+      duplicates: this.gapDuplicateCount,
+      lostFrames: this.gapLostFrames,
+    };
   }
 
   /* ------------------------------------------------------------------ */
