@@ -820,14 +820,7 @@ func (a *actorRefAdapter) Invoke(callID string, payload any) InvokeResult {
 		return fail(err)
 	}
 	if b, ok := val.([]byte); ok {
-		if a.owner != nil && a.owner.codec != nil {
-			return InvokeResult{Value: string(b)}
-		}
-		var decoded any
-		if json.Unmarshal(b, &decoded) == nil {
-			return InvokeResult{Value: decoded}
-		}
-		return InvokeResult{Value: string(b)}
+		return InvokeResult{Value: ScriptNormalizeValue(b, a.owner.codec != nil)}
 	}
 	return InvokeResult{Value: val}
 }
@@ -900,14 +893,7 @@ func (s *streamAdapter) Recv() StreamChunk {
 		return StreamChunk{Err: err.Error(), Ok: true}
 	}
 	if b, ok := val.([]byte); ok {
-		if s.owner != nil && s.owner.codec != nil {
-			return StreamChunk{Data: string(b), Ok: true}
-		}
-		var decoded any
-		if json.Unmarshal(b, &decoded) == nil {
-			return StreamChunk{Data: decoded, Ok: true}
-		}
-		return StreamChunk{Data: string(b), Ok: true}
+		return StreamChunk{Data: ScriptNormalizeValue(b, s.owner != nil && s.owner.codec != nil), Ok: true}
 	}
 	return StreamChunk{Data: val, Ok: true}
 }
@@ -937,14 +923,7 @@ func (s *planNodeStreamAdapter) Recv() StreamChunk {
 		return StreamChunk{Err: err.Error(), Ok: true}
 	}
 	if b, ok := val.([]byte); ok {
-		if s.owner != nil && s.owner.codec != nil {
-			return StreamChunk{Data: string(b), Ok: true}
-		}
-		var decoded any
-		if json.Unmarshal(b, &decoded) == nil {
-			return StreamChunk{Data: decoded, Ok: true}
-		}
-		return StreamChunk{Data: string(b), Ok: true}
+		return StreamChunk{Data: ScriptNormalizeValue(b, s.owner != nil && s.owner.codec != nil), Ok: true}
 	}
 	return StreamChunk{Data: val, Ok: true}
 }

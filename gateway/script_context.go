@@ -180,7 +180,12 @@ func (a *gatewayActorRefAdapter) Invoke(callID string, payload any) cell.InvokeR
 	if err != nil {
 		return cell.InvokeResult{Err: fmt.Sprintf("gateway script: invoke %s: %v", callID, err)}
 	}
-	return cell.InvokeResult{Value: val}
+	if b, ok := val.([]byte); ok {
+		// Same script-visible normalization as the cell host (string
+		// under a configured codec).
+		return cell.InvokeResult{Value: cell.ScriptNormalizeValue(b, true)}
+	}
+	return cell.InvokeResult{Value: cell.ScriptNormalizeValue(val, true)}
 }
 
 func (a *gatewayActorRefAdapter) InvokeStream(callID string, payload any) cell.Stream {
@@ -217,7 +222,10 @@ func (s *gatewayStreamAdapter) Recv() cell.StreamChunk {
 	if err != nil {
 		return cell.StreamChunk{Err: err.Error(), Ok: true}
 	}
-	return cell.StreamChunk{Data: val, Ok: true}
+	if b, ok := val.([]byte); ok {
+		return cell.StreamChunk{Data: cell.ScriptNormalizeValue(b, true), Ok: true}
+	}
+	return cell.StreamChunk{Data: cell.ScriptNormalizeValue(val, true), Ok: true}
 }
 
 func (s *gatewayStreamAdapter) Close() bool {

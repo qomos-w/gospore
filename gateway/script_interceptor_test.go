@@ -164,6 +164,70 @@ export fun before(ctx: Context, req: any): string {
 	}
 }
 
+// TestScriptInterceptor_InvokeValueShape pins the cross-host value
+// contract: a reply payload that arrives on the wire as raw JSON bytes
+// must reach the script as a STRING (the codec-configured cell-host
+// normalization, cell.ScriptNormalizeBytes). Before the shared
+// normalizer the gateway handed raw bytes to scripts while the cell
+// host returned a string — same callable, different payload shape
+// depending on which host executed the script.
+func TestScriptInterceptor_InvokeValueShape(t *testing.T) {
+	a, shutdown := newTestApp(t)
+	defer shutdown()
+
+	_, err := a.Spawn(actor.PropsFromFunc(func() actor.Actor {
+		return &shapeActor{}
+	}), "shape")
+	if err != nil {
+		t.Fatalf("Spawn shape: %v", err)
+	}
+
+	src := `import Context from "gospore"
+import ActorRef from "gospore"
+import InvokeResult from "gospore"
+export fun before(ctx: Context, req: any): string {
+	var svc: ActorRef = ctx.lookup_service("shape")
+	var result: InvokeResult = svc.invoke("shape.get", {})
+	if (result.err != "") {
+		return result.err
+	}
+	if (result.value.v != 7) {
+		return "wrong value shape"
+	}
+	return ""
+}`
+	si, err := gateway.NewScriptInterceptor(a, src)
+	if err != nil {
+		t.Fatalf("NewScriptInterceptor: %v", err)
+	}
+
+	req := &gateway.GatewayRequest{CallID: "test.echo", CustomerID: "alice"}
+	if err := si.Before(context.Background(), req); err != nil {
+		t.Fatalf("Before: value shape contract violated: %v", err)
+	}
+}
+
+type shapeActor struct {
+	actor.Host
+}
+
+func (a *shapeActor) OnStart(ctx actor.Context) error {
+	if err := ctx.Register("shape.get", func(_ actor.Context, _ shapeReq) (shapeResp, error) {
+		return shapeResp{V: 7}, nil
+	}); err != nil {
+		return err
+	}
+	return ctx.RegisterDomain("shape").Expose()
+}
+
+type shapeReq struct {
+	Ignore bool `json:"ignore"`
+}
+
+type shapeResp struct {
+	V int `json:"v"`
+}
+
 // TestScriptInterceptor_InvokeErrorPropagates verifies a failed invoke
 // reports its error through InvokeResult.err, which the script can turn
 // into a denial message.
