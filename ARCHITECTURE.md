@@ -267,6 +267,10 @@ Fire-and-forget / unary / streaming = client-side consumption differences; state
 
 Unary: call → final. Streaming: call → chunk* → final. Cancellation: a cancel frame. Server errors are expressed as final(Err).
 
+### 5.2b Execution mode: reflection inference vs compile-time pinning
+
+The mode (stateful/stateless) decides the lane: reflection infers it from the handler's first parameter type (`Context` exact-match → stateful owner lane, `PureContext` → stateless fork goroutines; §4.12). The typed registration API pins it at compile time: `actor.RegisterStateful[Req, Resp](ctx, callID, func(ctx Context, req Req) (Resp, error), ...)` and `actor.RegisterStateless[Req, Resp](...)` — the closure's context parameter type must match the function, so a mode mismatch is a compile error instead of a silent wrong-lane race. The typed functions are thin sugar over the same pipeline (options, schema extraction, dispatch unchanged); reflection inference remains available via the `ctx.Register(callID, handler)` escape hatch for dynamic/scripted registration.
+
 ### 5.3 Server-side dispatch
 
 Frame arrives at Cell → system/owner lane routing → Table.Lookup → stateful runs serially on the cell goroutine, stateless forks concurrent goroutines (limits and watermarks in §4.9) → Emitter/chunk return via the reply lane.
