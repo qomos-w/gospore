@@ -1,0 +1,17 @@
+.idea/
+/bin/
+/build/
+package-lock.json
+go.sum
+*.zip
+windows.syso
+bind_windows_amd64.go
+go.work
+go.work.sum
+AUDIT.md
+*.exe
+*.test
+node_modules/
+dist/
+.sporecode/
+.claude/
