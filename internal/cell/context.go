@@ -494,8 +494,8 @@ func (c *startContext) RegisterDomain(name string) *actor.DomainHandle {
 	}
 	exposeFn := func(svcName string) error {
 		var err error
-		if c.cell.exposeService != nil {
-			err = c.cell.exposeService(svcName)
+		if c.cell.svcHost != nil {
+			err = c.cell.svcHost.ExposeService(c.cell.self, svcName)
 		} else if c.cell.svcReg != nil {
 			err = c.cell.svcReg.Register(svcName, c.cell.self)
 		}
@@ -517,10 +517,10 @@ func (c *startContext) RegisterDomain(name string) *actor.DomainHandle {
 		return nil
 	}
 	exposeToChildrenFn := func(svcName string) error {
-		if c.cell.exposeServiceToChildren == nil {
+		if c.cell.svcHost == nil {
 			return fmt.Errorf("exposeToChildren %q: not available", svcName)
 		}
-		if err := c.cell.exposeServiceToChildren(svcName); err != nil {
+		if err := c.cell.svcHost.ExposeScoped(c.cell.self, svcName); err != nil {
 			return err
 		}
 		c.cell.AddChildService(svcName)
@@ -530,22 +530,23 @@ func (c *startContext) RegisterDomain(name string) *actor.DomainHandle {
 }
 
 func (c *startContext) LookupID(aid id.ActorID) (ref.Ref, bool) {
-	if c == nil || c.cell == nil || c.cell.lookupID == nil {
+	if c == nil || c.cell == nil || c.cell.treeHost == nil {
 		return nil, false
 	}
-	return c.cell.lookupID(aid)
+	return c.cell.treeHost.LookupID(aid)
 }
 func (c *startContext) LookupService(name string) (ref.Ref, bool) {
 	if c == nil || c.cell == nil {
 		return nil, false
 	}
-	if c.cell.lookupScopedService != nil {
-		if r, ok := c.cell.lookupScopedService(name); ok {
+	if c.cell.svcHost != nil {
+		if r, ok := c.cell.svcHost.LookupScopedService(c.cell.self, name); ok {
 			return r, true
 		}
-	}
-	if c.cell.lookupService != nil {
-		return c.cell.lookupService(name)
+		if r, ok := c.cell.svcHost.LookupService(name); ok {
+			return r, true
+		}
+		return nil, false
 	}
 	if c.cell.svcReg != nil {
 		return c.cell.svcReg.Lookup(name)
@@ -589,7 +590,7 @@ func (c *startContext) Clock() actor.Clock {
 	return c.cell.clock
 }
 func (c *startContext) After(delay time.Duration, callID string, payload any) error {
-	if c == nil || c.cell == nil || c.cell.deliver == nil {
+	if c == nil || c.cell == nil || c.cell.deliveryHost == nil {
 		return fmt.Errorf("after: not available")
 	}
 	clock := c.Clock()
@@ -625,48 +626,48 @@ func (c *startContext) After(delay time.Duration, callID string, payload any) er
 			frame.Headers = map[string]string{}
 		}
 		frame.Headers["gospore.loop"] = loop
-		_ = c.cell.deliver(c.cell.self, mailbox.Envelope{
-			Frame:  frame,
-			Payload: payload,
-			Sender: c.cell.self,
-		})
+			_ = c.cell.deliveryHost.Deliver(c.cell.self, mailbox.Envelope{
+				Frame:  frame,
+				Payload: payload,
+				Sender: c.cell.self,
+			})
 	}()
 	return nil
 }
 func (c *startContext) Spawn(props actor.Props, name string) (ref.Ref, error) {
-	if c == nil || c.cell == nil || c.cell.spawn == nil {
+	if c == nil || c.cell == nil || c.cell.treeHost == nil {
 		return nil, fmt.Errorf("spawn: not available")
 	}
-	return c.cell.spawn(c.cell.self, props, name)
+	return c.cell.treeHost.Spawn(c.cell.self, props, name)
 }
 func (c *startContext) Stop(target ref.Ref) error {
-	if c == nil || c.cell == nil || c.cell.stop == nil {
+	if c == nil || c.cell == nil || c.cell.treeHost == nil {
 		return nil
 	}
-	return c.cell.stop(target)
+	return c.cell.treeHost.Stop(target)
 }
 func (c *startContext) Destroy(target ref.Ref) error {
-	if c == nil || c.cell == nil || c.cell.destroy == nil {
+	if c == nil || c.cell == nil || c.cell.treeHost == nil {
 		return nil
 	}
-	return c.cell.destroy(target)
+	return c.cell.treeHost.Destroy(target)
 }
 func (c *startContext) Watch(target ref.Ref, kinds ...actor.WatchKind) error {
-	if c == nil || c.cell == nil || c.cell.deliver == nil {
+	if c == nil || c.cell == nil || c.cell.deliveryHost == nil {
 		return fmt.Errorf("watch: not available")
 	}
 	if target == nil {
 		return fmt.Errorf("watch: nil target")
 	}
-	return c.cell.deliver(target, mailbox.Envelope{
+	return c.cell.deliveryHost.Deliver(target, mailbox.Envelope{
 		Payload: mailbox.Watch{Watcher: c.cell.self, Kinds: kinds},
 	})
 }
 func (c *startContext) Unwatch(target ref.Ref) {
-	if c == nil || c.cell == nil || c.cell.deliver == nil || target == nil {
+	if c == nil || c.cell == nil || c.cell.deliveryHost == nil || target == nil {
 		return
 	}
-	_ = c.cell.deliver(target, mailbox.Envelope{
+	_ = c.cell.deliveryHost.Deliver(target, mailbox.Envelope{
 		Payload: mailbox.Unwatch{Watcher: c.cell.self},
 	})
 }
@@ -881,7 +882,7 @@ type planner struct {
 }
 
 func (p *planner) Plan(target ref.Ref, callID string, payload any, opts ...plan.Option) (plan.Node, error) {
-	if p == nil || p.cell == nil || p.cell.spawn == nil {
+	if p == nil || p.cell == nil || p.cell.treeHost == nil {
 		return nil, fmt.Errorf("plan: spawn not available")
 	}
 	if target == nil {
@@ -907,7 +908,7 @@ func (p *planner) Plan(target ref.Ref, callID string, payload any, opts ...plan.
 	}
 
 	actor := newPlanNodeActor(nodeCfg)
-	ref, err := p.cell.spawn(p.cell.self, actor.Props(), name)
+	ref, err := p.cell.treeHost.Spawn(p.cell.self, actor.Props(), name)
 	if err != nil {
 		return nil, err
 	}
@@ -916,13 +917,14 @@ func (p *planner) Plan(target ref.Ref, callID string, payload any, opts ...plan.
 	return actor, nil
 }
 
-// invokeOn routes a one-shot call through the cell's PlannerInvoke closure
-// when available, so the message sender is the planner's owning actor rather
-// than the target itself. Falls back to the legacy target.Invoke path for
-// cells constructed without the closure (e.g. narrow test fixtures).
+// invokeOn routes a one-shot call through the cell's InvokeAs host
+// capability when available, so the message sender is the planner's owning
+// actor rather than the target itself. Falls back to the legacy
+// target.Invoke path for cells constructed without the capability
+// (e.g. narrow test fixtures).
 func (p *planner) invokeOn(target ref.Ref, ctx context.Context, callID string, payload any) *invoke.Call {
-	if p != nil && p.cell != nil && p.cell.plannerInvoke != nil {
-		return p.cell.plannerInvoke(target, callID, payload)
+	if p != nil && p.cell != nil && p.cell.invokeAsHost != nil {
+		return p.cell.invokeAsHost.InvokeAs(p.cell.self, target, callID, payload)
 	}
 	return target.Invoke(ctx, callID, payload)
 }

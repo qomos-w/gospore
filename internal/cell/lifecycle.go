@@ -202,21 +202,17 @@ func (c *Cell) safeOnStop() {
 }
 
 func (c *Cell) clearServices() {
-	if c.unexposeService != nil {
+	if c.svcHost != nil {
 		for _, name := range c.services {
-			c.unexposeService(name)
+			c.svcHost.UnexposeService(c.self, name)
 		}
 	} else if c.svcReg != nil {
 		for _, name := range c.services {
 			c.svcReg.Unregister(name)
 		}
 	}
-	if c.unexposeAllScopedServices != nil {
-		c.unexposeAllScopedServices()
-	} else if c.unexposeServiceToChildren != nil {
-		for _, name := range c.childServices {
-			c.unexposeServiceToChildren(name)
-		}
+	if c.svcHost != nil {
+		c.svcHost.UnexposeAllScoped(c.self)
 	}
 	if c.discoveryProvider != nil && c.namespace != "" {
 		_ = c.discoveryProvider.Deregister(c.namespace)
@@ -226,12 +222,12 @@ func (c *Cell) clearServices() {
 }
 
 func (c *Cell) notifyWatchers() {
-	if c.watchers.Len() == 0 || c.deliver == nil {
+	if c.watchers.Len() == 0 || c.deliveryHost == nil {
 		return
 	}
 	snapshot := c.watchers.Snapshot()
 	for _, w := range snapshot {
-		_ = c.deliver(w, mailbox.Envelope{Payload: mailbox.Terminated{Of: c.self}})
+		_ = c.deliveryHost.Deliver(w, mailbox.Envelope{Payload: mailbox.Terminated{Of: c.self}})
 	}
 }
 

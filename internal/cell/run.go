@@ -189,8 +189,8 @@ func (c *Cell) handleCall(env mailbox.Envelope) error {
 func (c *Cell) makeReply(env mailbox.Envelope) func(message.Frame) {
 	return func(f message.Frame) {
 		f.CorID = env.Frame.CorID
-		if c.deliver != nil && env.Sender != nil {
-			if err := c.deliver(env.Sender, mailbox.Envelope{Frame: f}); err != nil && c.logger != nil {
+		if c.deliveryHost != nil && env.Sender != nil {
+			if err := c.deliveryHost.Deliver(env.Sender, mailbox.Envelope{Frame: f}); err != nil && c.logger != nil {
 				c.logger.Error("cell: reply delivery failed", "callID", env.Frame.CallID, "corID", f.CorID, "err", err)
 			}
 		}

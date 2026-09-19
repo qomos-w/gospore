@@ -85,14 +85,12 @@ type Cell struct {
 	svcReg                    service.Registry
 	discoveryProvider         discovery.Provider
 	discoveryAddress          string
-	lookupService             func(string) (ref.Ref, bool)
-	exposeService             func(name string) error
-	unexposeService           func(name string)
-	exposeServiceToChildren   func(name string) error
-	unexposeServiceToChildren func(name string)
-	unexposeAllScopedServices func()
-	lookupScopedService       func(name string) (ref.Ref, bool)
-	resReg                    resource.Registry
+	// host capability groups, resolved once in New from Config.Host.
+	svcHost      ServiceHost
+	treeHost     TreeHost
+	invokeAsHost InvokeAsHost
+	deliveryHost DeliveryHost
+	resReg       resource.Registry
 	namespace                 string
 	codec                     codec.Codec
 	schemas                   schema.Reader
@@ -102,8 +100,6 @@ type Cell struct {
 	events                    *events.StoreImpl
 	projections               *projection.StoreImpl
 	policyStore               actor.PolicyStore
-	deliver                   func(ref.Ref, mailbox.Envelope) error
-	shutdown                  func(reason error)
 	projectionVersion         uint64
 	projectionState           projection.FieldSnapshot
 	projectionMu              sync.Mutex                 // serializes applyProjectionIfObserved across owner/system/pure lanes
@@ -122,11 +118,6 @@ type Cell struct {
 	// handleDestroy) — guard with cancelMu.
 	runCancel     context.CancelFunc
 	cancelMu      sync.Mutex
-	spawn         func(parent ref.Ref, props actor.Props, name string) (ref.Ref, error)
-	plannerInvoke func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call
-	stop          func(target ref.Ref) error
-	destroy       func(target ref.Ref) error
-	lookupID      func(id.ActorID) (ref.Ref, bool)
 	invokeTable   *invoke.PendingTable
 	corIDGen      *id.CorIDGenerator
 	idGen         *id.Canonical
@@ -200,40 +191,16 @@ type Config struct {
 	// DiscoveryAddress is the network endpoint advertised in discovery
 	// registrations. Optional; when empty, Instance records have no Address.
 	DiscoveryAddress string
-	// LookupService resolves a service name to a Ref, including cross-App
-	// fallback via the discovery provider. Optional; when nil,
-	// ctx.LookupService only checks the local ServiceRegistry.
-	LookupService func(string) (ref.Ref, bool)
-	// ExposeService registers a global service on behalf of this actor.
-	// Optional; when nil, ctx.Expose falls back to ServiceRegistry.Register.
-	ExposeService func(name string) error
-	// UnexposeService unregisters a global service on behalf of this actor.
-	// Optional; when nil, clearServices falls back to ServiceRegistry.Unregister.
-	UnexposeService func(name string)
-	// ExposeServiceToChildren registers a scoped service visible only to this
-	// actor's descendants. Optional; when nil, ctx.ExposeToChildren returns an error.
-	ExposeServiceToChildren func(name string) error
-	// UnexposeServiceToChildren unregisters a single scoped service.
-	// Optional; when nil, clearServices skips scoped cleanup.
-	UnexposeServiceToChildren func(name string)
-	// UnexposeAllScopedServices unregisters all scoped services for this actor.
-	// Optional; when nil, clearServices skips scoped cleanup.
-	UnexposeAllScopedServices func()
-	// LookupScopedService resolves a scoped service visible to this actor.
-	// Optional; when nil, ctx.LookupService never resolves scoped services.
-	LookupScopedService func(name string) (ref.Ref, bool)
+	// Host is the app-level capability bundle this Cell draws services
+	// from. Optional; capability groups (ServiceHost, TreeHost,
+	// InvokeAsHost, DeliveryHost — see host.go) are resolved by type
+	// assertion, and any group the host does not implement falls back
+	// to the documented default behavior (host_fallbacks_test.go pins
+	// the full table).
+	Host Host
 	// Monitor is an optional observability hook for handler invocations.
 	// When nil, no observations are emitted.
 	Monitor Monitor
-	// Deliver sends an envelope to the target actor's mailbox. When nil,
-	// watch notifications and cross-actor deliveries are silently dropped.
-	// The App/Tree layer provides this closure by capturing the Local
-	// transport or equivalent delivery mechanism.
-	Deliver func(target ref.Ref, env mailbox.Envelope) error
-	// Shutdown is called when this Cell (as root) receives an Escalated
-	// notification that its own supervisor escalates. Optional; when nil,
-	// root escalation is silently observed.
-	Shutdown func(reason error)
 	// Events is the events store for lifecycle and callable event emission.
 	// Optional; when nil, no events are emitted. When non-nil, the Cell
 	// checks HasSubscribers before Record creation.
@@ -265,25 +232,6 @@ type Config struct {
 	// runtime. Wiring is the App's responsibility — initialise the runtime
 	// and load the actor's script module before passing it to Cell construction.
 	SporeRuntime *script.Runtime
-	// PlannerInvoke issues a call on behalf of this cell's actor with the
-	// cell's Self as the message sender, so ctx.Caller() in the target's
-	// handlers resolves to the calling actor. Wired by the App layer.
-	// Optional; when nil, planner Call/Stream fall back to target.Invoke,
-	// whose sender is the target itself (legacy behavior).
-	PlannerInvoke func(target ref.Ref, callID string, payload any, headers ...map[string]string) *invoke.Call
-	// Spawn creates a child actor under parent. Wired by the App layer to
-	// tree.Tree.Spawn. Optional; when nil, ctx.Spawn returns an error.
-	Spawn func(parent ref.Ref, props actor.Props, name string) (ref.Ref, error)
-	// Stop idles target without removing it from the tree. Wired by the
-	// App layer to tree.Tree.Stop. Optional; when nil, ctx.Stop returns nil.
-	Stop func(target ref.Ref) error
-	// Destroy removes target and its subtree from the tree. Wired by the
-	// App layer to tree.Tree.Destroy. Optional; when nil, ctx.Destroy
-	// returns nil.
-	Destroy func(target ref.Ref) error
-	// LookupID resolves an ActorID to a Ref. Wired by the App layer to
-	// tree.Tree.LookupID. Optional; when nil, ctx.LookupID returns (nil, false).
-	LookupID func(id.ActorID) (ref.Ref, bool)
 	// InvokeTable is the App-level pending table for cross-actor calls.
 	// Optional; when nil, ctx.Invoke and ctx.InvokeStream return empty/error.
 	InvokeTable *invoke.PendingTable
@@ -343,13 +291,6 @@ func New(cfg Config) *Cell {
 		svcReg:                    cfg.ServiceRegistry,
 		discoveryProvider:         cfg.DiscoveryProvider,
 		discoveryAddress:          cfg.DiscoveryAddress,
-		lookupService:             cfg.LookupService,
-		exposeService:             cfg.ExposeService,
-		unexposeService:           cfg.UnexposeService,
-		exposeServiceToChildren:   cfg.ExposeServiceToChildren,
-		unexposeServiceToChildren: cfg.UnexposeServiceToChildren,
-		unexposeAllScopedServices: cfg.UnexposeAllScopedServices,
-		lookupScopedService:       cfg.LookupScopedService,
 		resReg:                    cfg.Resources,
 		namespace:                 cfg.Namespace,
 		codec:                     cfg.Codec,
@@ -360,13 +301,6 @@ func New(cfg Config) *Cell {
 		events:                    cfg.Events,
 		projections:               cfg.Projections,
 		policyStore:               cfg.PolicyStore,
-		deliver:                   cfg.Deliver,
-		shutdown:                  cfg.Shutdown,
-		spawn:                     cfg.Spawn,
-		plannerInvoke:             cfg.PlannerInvoke,
-		stop:                      cfg.Stop,
-		destroy:                   cfg.Destroy,
-		lookupID:                  cfg.LookupID,
 		invokeTable:               cfg.InvokeTable,
 		corIDGen:                  cfg.CorIDGen,
 		idGen:                     cfg.IDGen,
@@ -387,6 +321,18 @@ func New(cfg Config) *Cell {
 		replyQ:  make(chan mailbox.Envelope, 64),
 	}
 	c.scriptRuntime = newScriptRuntimeOwner(cfg.Codec, c)
+	if sh, ok := cfg.Host.(ServiceHost); ok {
+		c.svcHost = sh
+	}
+	if th, ok := cfg.Host.(TreeHost); ok {
+		c.treeHost = th
+	}
+	if ih, ok := cfg.Host.(InvokeAsHost); ok {
+		c.invokeAsHost = ih
+	}
+	if dh, ok := cfg.Host.(DeliveryHost); ok {
+		c.deliveryHost = dh
+	}
 	return c
 }
 
@@ -703,16 +649,28 @@ func (c *Cell) eventRoutingKey() string {
 	return c.namespace
 }
 func (c *Cell) nativeSpawnFn() func(ref.Ref, actor.Props, string) (ref.Ref, error) {
-	return c.spawn
+	if c.treeHost == nil {
+		return nil
+	}
+	return c.treeHost.Spawn
 }
 func (c *Cell) nativeStopFn() func(ref.Ref) error {
-	return c.stop
+	if c.treeHost == nil {
+		return nil
+	}
+	return c.treeHost.Stop
 }
 func (c *Cell) nativeDeliverFn() func(ref.Ref, mailbox.Envelope) error {
-	return c.deliver
+	if c.deliveryHost == nil {
+		return nil
+	}
+	return c.deliveryHost.Deliver
 }
 func (c *Cell) nativeLookupIDFn() func(id.ActorID) (ref.Ref, bool) {
-	return c.lookupID
+	if c.treeHost == nil {
+		return nil
+	}
+	return c.treeHost.LookupID
 }
 func (c *Cell) nativeLookupServiceFn() func(string) (ref.Ref, bool) {
 	if c.svcReg == nil {

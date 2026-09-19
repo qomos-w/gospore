@@ -357,10 +357,10 @@ func (c *Cell) recoverAndDecide(recovered any) {
 }
 
 func (c *Cell) notifyParentEscalation(reason error) {
-	if c.parent != nil && c.deliver != nil {
-		_ = c.deliver(c.parent, mailbox.Envelope{Payload: mailbox.Escalated{Child: c.self, Reason: reason}})
-	} else if c.shutdown != nil {
-		c.shutdown(reason)
+	if c.parent != nil && c.deliveryHost != nil {
+		_ = c.deliveryHost.Deliver(c.parent, mailbox.Envelope{Payload: mailbox.Escalated{Child: c.self, Reason: reason}})
+	} else if c.deliveryHost != nil {
+		c.deliveryHost.RootEscalated(reason)
 	}
 }
 
