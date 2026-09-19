@@ -46,8 +46,8 @@ func (a *MyActor) OnStop(ctx actor.Context) error  { return nil }
 3. Unified Invoke: fire-and-forget / unary / streaming are three consumption forms of the same call.
 4. ActorTree + App as Root: all actors form a single tree; closing the App equals a cascading stop of the whole tree.
 5. Registration-based actors: `ctx.Register(callID, fn)` inside `OnStart`, not `Receive(msg)`.
-6. Dual observability channels: every actor exposes a State Channel (projection, §4.18) and an Event Channel (events, §4.23); the mechanisms are symmetric and support `since`-based gap replay.
-7. A call is a child actor: `ctx.Plan(...)` wraps one invocation as a child actor (§4.22).
+6. Dual observability channels: every actor exposes a State Channel (projection, §4.18) and an Event Channel (events, §4.22); the mechanisms are symmetric and support `since`-based gap replay.
+7. A call is a child actor: `ctx.Plan(...)` wraps one invocation as a child actor (§4.21).
 
 ## 1. Design principles
 
@@ -107,7 +107,7 @@ User actors (Go handlers / script handlers / components)
 | `projection` | State Channel storage (fingerprint + DeltaWindow) |
 | `plan` | Plan Node (a call as a child actor) |
 | `scriptbridge` | Static spore Capability binding (§4.19) |
-| `gateway` | HTTP/WS boundary, auth, and interceptors (frontgate was folded in) |
+| `gateway` | HTTP/WS boundary, auth, and interceptors (the historical `frontgate/` subset package was removed) |
 | `cmd/gospore-gen-ts` | manifest → TS client codegen |
 | `web-client` | TypeScript client SDK (not a Go package) |
 
@@ -241,15 +241,19 @@ Hot-update protocol (constants `actor.CallIDReload` / `actor.CallIDReplace`):
 
 A nil `ReloadReq.Definition` is invalid. Validation is two-layer: `actor.ValidateDefinition` (pure data) + Cell-level `ClassifyReloadDiff` (old vs new), then a serial swap on the cell goroutine with rollback on failure.
 
-### 4.22 Plan Node (a call as a child actor)
+### 4.21 Plan Node (a call as a child actor)
 
-`ctx.Plan(target, callID, payload)` wraps one invocation as a child actor (planNodeActor): it gains independent supervision, Watch, projection, and cancellation, with a short lifecycle (reclaimed when the Invoke finishes). `plan.State` is a five-value lifecycle; Retry/CircuitBreaker/Pause in `plan.Option` are Phase 2 placeholders (currently no-op).
+`ctx.Plan(target, callID, payload)` wraps one invocation as a child actor (planNodeActor): it gains independent supervision, Watch, projection, and cancellation, with a short lifecycle (reclaimed when the Invoke finishes). `plan.State` is a five-value lifecycle. Retry/circuit-breaker/pause options were removed (they were documented no-ops); they will be re-introduced together with real semantics, not as placeholders.
 
-### 4.23 Events Channel
+### 4.22 Events Channel
 
-Each actor has one `events.Ring` (default 256, override via `WithEventRingCapacity`): invoke / lifecycle / watch metadata Records append by SeqNo. Subscriptions via `subscribe_service` / `subscribe_instance`; the `since` parameter implements gap replay, with clients auto-switching among live-only / replay-then-live / gap regimes. Records do not embed actor identity (the subscription dimension already determines ownership). RemoteSink is the reserved seam for cross-process push (non-blocking contract guaranteed by the implementer).
+Each actor has one `events.Ring` (default 256, override via `WithEventRingCapacity`): invoke / lifecycle / watch metadata Records append by SeqNo. Ring overflow is counted (`Ring.Evicted`) and surfaced per-actor through `gospore.events.stats` (`rings[]`, sorted by evictions, only rings with evictions > 0), so silent history loss is queryable. Subscriptions via `subscribe_service` / `subscribe_instance`; the `since` parameter implements gap replay, with clients auto-switching among live-only / replay-then-live / gap regimes. Records do not embed actor identity (the subscription dimension already determines ownership).
 
-### 4.24 Timer Wheel (timer infrastructure)
+**Known deviation**: lifecycle/callable event emission is currently gated on `HasSubscribers` (`internal/cell/run.go`) — during periods with zero subscribers, no ring entries are written, so §4.22's "retain recent history" holds only from the first subscription onward. Awaiting an always-write decision; `ctx.EmitEvent` (user events) additionally never lands in the ring at all.
+
+**RemoteSink contract**: dispatch happens *outside* the store lock — the sink is invoked concurrently and potentially out of order; implementations must be non-blocking, safe for concurrent use, and buffer internally if ordering matters.
+
+### 4.23 Timer Wheel (timer infrastructure)
 
 `AppContext.After(delay, callID, payload)` registers a delayed self-call: the Cell records it in `timerMeta` (callID → routing metadata) and, on expiry, delivers it to Self as an ordinary Invoke. A stopped Cell refuses new After calls (`DiagEventAfterStop`).
 
@@ -279,7 +283,7 @@ The three lanes are bounded; a full owner lane raises `mailbox.ErrFull` to the c
 
 - Failure detection points: handler panic (recover-and-decide), OnInit/OnStart returning an error, child termination reported via watch.
 - Decision: one-for-one — restart (rebuild the cell, state handled per §4.20 semantics) or stop and escalate.
-- Watch/Terminated: `ctx.Watch(target)` receives Terminated by default; the `WatchKind` bitmask extends to more events; watch is independent of the Event Channel (§4.23 is a pull/subscription stream; watch is targeted notification).
+- Watch/Terminated: `ctx.Watch(target)` receives Terminated by default; the `WatchKind` bitmask extends to more events; watch is independent of the Event Channel (§4.22 is a pull/subscription stream; watch is targeted notification).
 
 ## 7. Boundary with spore
 
@@ -289,7 +293,7 @@ gospore → spore is a one-way dependency, aligned with the published `github.co
 
 ### 7.2 Transport boundary
 
-spore provides codecs and binary frame encoding; gospore's transport only moves Frames and does not understand schema semantics. Cross-process routing (Router/HTTP/RemoteRef) is implemented on the gospore side.
+spore provides codecs and binary frame encoding; gospore's transport only moves Frames and does not understand schema semantics. Cross-process routing (Router/HTTP/RemoteRef) is implemented on the gospore side. Inbound frame-channel capacity defaults to `transport.DefaultInboundCapacity` and is overridable per transport (`NewHTTPWithBuffer`, `NewMemoryRemotePairWithBuffer`).
 
 ### 7.3 Types + callable registration
 
@@ -302,6 +306,25 @@ gospore uses `spore.DescribeGoStruct` to produce TypeDescs; binding-side Capabil
 ### 7.5 Diagnostic codes
 
 Diagnostic codes are string constants, namespaced by package prefix, single-sourced in each package's `diag.go`: `actor.Diag*` / `app.Diag*` / `cell.Diag*` / `handler.Diag*` (pure-overflow, stateless-write, etc.) / `invoke.Diag*` / `mailbox.Diag*` / `message.Diag*` / `schema.Diag*` / `service.Diag*` / `plan.Diag*` / `projection.Diag*` / `resource.Diag*` / `tree.Diag*` / `events.Diag*`. The `MapErrToDiag` pattern provides err → Diag mapping per package. New diagnostic codes must land in the corresponding diag.go before use.
+
+### 7.6 Gateway WS session lifecycle (timeout governance)
+
+All WS connection timeouts and buffers flow through one tuning struct, `gateway.WSTimeouts` (`gateway.SetWSTimeouts` on the server, `app.WithGatewayWSTimeouts` at wiring). Defaults in parentheses; every knob overridable per deployment:
+
+| Knob | Meaning | Default |
+|---|---|---|
+| `PingInterval` | server ping cadence; a pong refreshes the read deadline | 30s |
+| `ReadIdle` | no inbound frame (incl. pong) → session torn down | 65s |
+| `WriteTimeout` | per-frame write deadline; expiry force-closes | 30s |
+| `PingWriteTimeout` | write deadline for ping frames | 5s |
+| `StallForceClose` | no write progress at all → force-close (dead peer, not a paused one) | 10m |
+| `CloseDrainTimeout` | grace period to flush `outCh` on close | 5s |
+| `OverflowBudgetBytes` | byte budget for frames spilled past a full `outCh` (safety valve: exceeded → force-close so the client reconnects and replays via `since`) | 32 MiB |
+| `OutChCapacity` | buffered outbound frame channel depth | 64 |
+
+Notable semantics: a ping *write* failure logs a warning and force-closes the connection (it previously exited silently, leaving zombie sessions); a silent client that keeps ponging is considered alive by design. A client-driven repro suite for the stall/deadline paths lives in `gateway/ws_deadline_test.go`.
+
+`Server.ReadyChan()` (and `app.App.GatewayReady()`) may be called from any goroutine, concurrently with `Run` — the channel is created eagerly.
 
 ## 8. Public contracts vs internals
 
@@ -319,7 +342,7 @@ The actor.Context/PureContext method surface, the Frame wire format, SchemaID al
 
 ### 8.4 Test layout
 
-Per-package tests live with their packages; cross-package subsystem tests in `integration/`; gateway end-to-end behavior tests in `gateway/*_test.go`; TS client contract tests in `web-client/src/*.test.ts`. The Go↔TS contracts (frame format, system protocol constants) are currently hand-written on both sides with partial codegen coverage; changing builtin system protocol IDs requires syncing both sides (known debt).
+Per-package tests live with their packages; cross-package subsystem tests in `integration/`; gateway end-to-end behavior tests in `gateway/*_test.go` plus timer-driven integration tests (WS/HTTP agreement, app-level WSTimeouts, transport+gateway same-actor) in `integration/gateway_test.go`; TS client contract tests in `web-client/src/*.test.ts`. The Go↔TS wire contracts are generated from a single source: `internal/wiregen` renders `web-client/src/generated/system_protocol.ts` (system protocol constants/TypeDescs) and `web-client/testdata/frame_vector.json` (a golden frame vector marshaled by the real gateway encoder, consumed by vitest); changing builtin system protocols requires only `go test ./internal/wiregen -update`, and drift on either side fails CI.
 
 ## 9. Out of scope / non-goals
 
@@ -338,8 +361,8 @@ Per-package tests live with their packages; cross-package subsystem tests in `in
 | Lane | The three queues inside a Cell: owner/system/reply |
 | Frame | Wire message unit (message.Frame) |
 | State Channel | Projection channel: current state + delta (§4.18) |
-| Event Channel | Event channel: historical action Records (§4.23) |
-| Plan | The mechanism wrapping one call as a child actor (§4.22) |
+| Event Channel | Event channel: historical action Records (§4.22) |
+| Plan | The mechanism wrapping one call as a child actor (§4.21) |
 | Definition | Data-driven description of an actor (handlers/components/meta), the reload payload |
 | Capability | Method group exposed to scripts by spore binding (§4.19) |
 | wireName | Cross-language authoritative name of a projection field (Go json tag) |

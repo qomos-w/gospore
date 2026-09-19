@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **WS timeout governance**: all eight gateway WS connection
+  timeouts/buffers consolidated into `gateway.WSTimeouts`
+  (`gateway.SetWSTimeouts`, `app.WithGatewayWSTimeouts`): ping
+  interval, read-idle, write/ping-write deadlines, stall no-progress
+  horizon, close drain timeout, overflow byte budget, outbound channel
+  capacity. A ping write failure now force-closes the connection with
+  a warning instead of exiting silently (zombie-session fix).
+- **Events ring overflow observability**: `events.Ring.Evicted()`
+  counts overflowed records; `gospore.events.stats` returns a
+  `rings[]` array (per-actor evictions, worst first) so silent history
+  loss is queryable.
+- **Transport inbound capacity is parameterizable**:
+  `transport.NewHTTPWithBuffer` / `NewMemoryRemotePairWithBuffer`
+  (default `transport.DefaultInboundCapacity`), replacing the
+  hardcoded 64-frame channels.
+- **`app.App.GatewayReady()`** exposed on the public interface
+  (previously only on the concrete implementation): a channel that
+  closes when the gateway is listening.
+- **Integration test suite** (`integration/gateway_test.go`): first
+  cross-facet coverage — typed unary over WS and HTTP agreeing,
+  app-level `WSTimeouts` proven to reach real connections (timer-driven
+  ReadIdle drop of a non-ponging client), and transport + gateway
+  hitting the same actor instance across two Apps.
+
+### Fixed
+
+- **`gateway.Server.ReadyChan` data race**: lazy channel initialization
+  raced `Run`'s close; the channel is now created eagerly in
+  `NewServer` and the method is documented concurrent-safe.
+- **`events.StoreImpl.Push` called `RemoteSink.Push` while holding the
+  global store lock**: a blocking network-backed sink serialised every
+  actor's event writes behind one remote. Dispatch now snapshots under
+  the lock and runs outside it; the `RemoteSink` contract documents
+  concurrent, possibly-reordered invocation.
+- **Scoped/global service registration errors** are decided in the
+  `service` package (`ScopedRegistrationError`,
+  `GlobalRegistrationError`); `tree` no longer re-derives the
+  classification (single semantics source).
+
+### Changed
+
+- ARCHITECTURE.md reconciled with the above (new §7.6 WS lifecycle,
+  §4.22 ring contract + known `HasSubscribers` deviation documented,
+  §8.4 wire codegen reality, §4.20→4.23 renumbering closing the §4.21
+  gap).
+
 ## v0.2.0 (2026-09-19)
 
 Focus: correctness of the gateway script-interceptor path, dead-surface
