@@ -49,6 +49,9 @@
 
 ### Changed
 
+- **Tier-1 file splits** (pure code movement, no behavior change): `app/app.go` 1875→437 lines (options / bootstrap / spawn / services / invoke), `internal/cell/run.go` 1395→329 (lanes / lifecycle / dispatch), `gateway/server.go` 992→334 (server_http / gatesession).
+- **`waitForCellStart` polls no more**: spawn waits for OnStart via `Cell.StartDone()` (closed once on the first terminal start outcome; a panicked OnStart defers to the supervisor restart) instead of a 2ms re-check loop — removes per-spawn timer churn and up to 2ms latency. Error contract unchanged. sporemind audited zero coupling.
+
 - **Events ring always-write** (user decision): lifecycle and callable records land in the ring during subscriber-free periods (gap replay across idle windows now works), and `ctx.EmitEvent` records a `WatchUserEvent` entry carrying the registered kind name (payload stays on the bus). New `actor.WatchUserEvent` kind + `events.Record.Event` field; `ValidWatchKind` now enumerates 12 kinds. A `RingStats`/`events.stats` `Evicted` audit is the compensating control for chatty actors.
 - **Cell boot-drain data race fixed** (`TestSpawnInheritsParentRole` under `-race`): `handleStart` could `ownerWG.Add` + spawn `ownerLoop` after an immediately-cancelled `Run` had already drained (illegal Add-after-Wait; orphaned loop ranging a nil channel). The spawn now re-checks `ownerQClosed` under `ownerQMu`; `runCancel` access is mutex-guarded across the Run goroutine and the system lane. Pre-existing race, probability-shifted into view by always-write timing.
 
