@@ -249,6 +249,11 @@ waitAll:
 	if a.remoteTP != nil {
 		a.remoteTP.Close()
 	}
+	// Release store-owned resources: projection subscriptions stop their
+	// batch timers (AfterFunc would fire post-shutdown otherwise) and
+	// event subscribers are torn down instead of leaking channels.
+	a.eventsStore.Close()
+	a.projStore.Close()
 	cancel()
 	return ctx.Err()
 }
@@ -258,6 +263,12 @@ func (a *appImpl) Shutdown(_ context.Context) error {
 		if fn, ok := a.cancel.Load().(context.CancelFunc); ok && fn != nil {
 			fn()
 		}
+		// Shutdown may be the only teardown path when Run was never
+		// driven to completion (e.g. abort during boot): release the
+		// stores here too. Both Close calls are idempotent with the
+		// Run-teardown calls.
+		a.eventsStore.Close()
+		a.projStore.Close()
 	})
 	return nil
 }

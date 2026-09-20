@@ -17,6 +17,7 @@ type StoreImpl struct {
 	perActor   map[id.ActorID]*actorState
 	ringCap    int
 	RemoteSink RemoteSink // optional; when nil, only in-process delivery
+	closeOnce  sync.Once
 }
 
 type actorState struct {
@@ -31,6 +32,12 @@ type eventSubscription struct {
 	kinds     []actor.WatchKind
 	closeOnce sync.Once
 	cleanup   func()
+
+	// dropped counts records the fan-out loop could not deliver because
+	// this subscriber's buffer was full (non-blocking send default
+	// branch). Observable via StoreImpl.SubscriberStats so a slow
+	// consumer is distinguishable from a quiet actor.
+	dropped uint64
 }
 
 // NewStore creates a new in-memory events store. ringCap sets the per-actor
@@ -73,6 +80,7 @@ func (s *StoreImpl) Push(actorID id.ActorID, rec Record) {
 		select {
 		case sub.ch <- rec:
 		default:
+			sub.dropped++
 		}
 	}
 	sink := s.RemoteSink
@@ -123,6 +131,7 @@ func (s *StoreImpl) Subscribe(actorID id.ActorID, sinceSeqNo uint64, kinds []act
 			select {
 			case sub.ch <- rec:
 			default:
+				sub.dropped++
 			}
 		}
 	}
@@ -177,6 +186,63 @@ func (s *StoreImpl) RingStats() []RingStat {
 	return out
 }
 
+// Close tears down every active subscription and rejects further ones.
+// The store itself owns no goroutines or timers — subscriber Close is the
+// whole cleanup surface. Idempotent. Called on App shutdown; without it,
+// subscribers created via Subscribe leak their channels until GC.
+func (s *StoreImpl) Close() {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		subs := make([]*eventSubscription, 0, 8)
+		for _, as := range s.perActor {
+			subs = append(subs, as.subscribers...)
+			as.subscribers = nil
+		}
+		s.mu.Unlock()
+		for _, sub := range subs {
+			_ = sub.Close()
+		}
+	})
+}
+
+// SubscriberStat is one active subscription's loss snapshot: how many
+// records the fan-out loop dropped because the subscriber's buffer was
+// full, plus its kind filter. Surfaced with RingStat via
+// gospore.events.stats so a slow consumer is distinguishable from a
+// quiet actor.
+type SubscriberStat struct {
+	ActorID   id.ActorID
+	Kinds     []actor.WatchKind
+	Dropped   uint64
+	BufferCap int
+}
+
+// SubscriberStats returns per-subscription drop counters for every
+// active subscription, sorted by Dropped descending (then ActorID) so
+// the slowest consumers surface first.
+func (s *StoreImpl) SubscriberStats() []SubscriberStat {
+	s.mu.Lock()
+	out := make([]SubscriberStat, 0, 4)
+	for actorID, as := range s.perActor {
+		for _, sub := range as.subscribers {
+			out = append(out, SubscriberStat{
+				ActorID:   actorID,
+				Kinds:     append([]actor.WatchKind(nil), sub.kinds...),
+				Dropped:   sub.dropped,
+				BufferCap: cap(sub.ch),
+			})
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Dropped != out[j].Dropped {
+			return out[i].Dropped > out[j].Dropped
+		}
+		return out[i].ActorID.String() < out[j].ActorID.String()
+	})
+	return out
+}
+
 // HasSubscribers reports whether the actor has any active subscriptions.
 func (s *StoreImpl) HasSubscribers(actorID id.ActorID) bool {
 	s.mu.Lock()
@@ -189,6 +255,15 @@ func (s *StoreImpl) HasSubscribers(actorID id.ActorID) bool {
 }
 
 func (sub *eventSubscription) Recv() (Record, error) {
+	// Done takes priority over a non-empty buffer: once the store (or
+	// the subscriber) is closed the stream is terminated, buffered
+	// records are not drained — a random select would flap between
+	// data and EOF for closed subscriptions with backlog.
+	select {
+	case <-sub.done:
+		return Record{}, io.EOF
+	default:
+	}
 	select {
 	case rec, ok := <-sub.ch:
 		if !ok {

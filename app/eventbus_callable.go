@@ -138,6 +138,18 @@ type eventStatsResp struct {
 	// surfaced only as subscriber gap markers; this makes the loss
 	// itself queryable.
 	Rings []eventStatsRing `json:"rings"`
+	// StoreSubs lists the events store's per-subscription drop counters
+	// (store-level Subscribe fan-out, distinct from the event bus above):
+	// records lost to a full subscriber buffer. A slow consumer shows up
+	// here even when its ring has never overflowed.
+	StoreSubs []eventStatsStoreSub `json:"storeSubs"`
+}
+
+type eventStatsStoreSub struct {
+	ActorID   string   `json:"actorId"`
+	Kinds     []string `json:"kinds,omitempty"`
+	Dropped   uint64   `json:"dropped"`
+	BufferCap int      `json:"bufferCap"`
 }
 
 type eventStatsRing struct {
@@ -182,7 +194,23 @@ func (a *appImpl) handleEventStats(_ actor.PureContext, _ eventStatsReq) (eventS
 			Evicted:  rs.Evicted,
 		})
 	}
-	return eventStatsResp{Subscriptions: out, Rings: rings}, nil
+	storeSubs := make([]eventStatsStoreSub, 0)
+	for _, ss := range a.eventsStore.SubscriberStats() {
+		if ss.Dropped == 0 {
+			continue
+		}
+		kinds := make([]string, 0, len(ss.Kinds))
+		for _, k := range ss.Kinds {
+			kinds = append(kinds, k.String())
+		}
+		storeSubs = append(storeSubs, eventStatsStoreSub{
+			ActorID:   ss.ActorID.String(),
+			Kinds:     kinds,
+			Dropped:   ss.Dropped,
+			BufferCap: ss.BufferCap,
+		})
+	}
+	return eventStatsResp{Subscriptions: out, Rings: rings, StoreSubs: storeSubs}, nil
 }
 
 // drainSubscription pumps events from sub to emit until ctx or emit signals done.

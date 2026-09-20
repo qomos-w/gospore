@@ -296,7 +296,10 @@ func (c *Cell) enqueueReply(env mailbox.Envelope) (err error) {
 func (c *Cell) enqueueLoop(name string, env mailbox.Envelope) bool {
 	// Stamp once: the queue-wait metric measures from first attempt.
 	env.EnqueuedAt = time.Now()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
 	for {
 		c.loopsMu.Lock()
 		lane, ok := c.loops[name]
@@ -326,13 +329,21 @@ func (c *Cell) enqueueLoop(name string, env mailbox.Envelope) bool {
 		// running concurrently with its lane is an actor-model violation
 		// (unsynchronized state access). Callers turn the eventual false
 		// into an explicit error reply.
-		if time.Now().After(deadline) {
+		//
+		// Waiting on timer/ticker channels (not time.Sleep) so a dead
+		// cell (Run returned, done closed) bails out immediately instead
+		// of burning the full 5s deadline on a handler that can never
+		// make progress.
+		select {
+		case <-deadline.C:
 			if c.logger != nil {
 				c.logger.Warn("cell: custom lane queue full after 5s timeout",
 					"actor", c.selfID(), "lane", name, "callID", env.Frame.CallID, "queued", len(q), "cap", cap(q))
 			}
 			return false
+		case <-c.done:
+			return false
+		case <-tick.C:
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }

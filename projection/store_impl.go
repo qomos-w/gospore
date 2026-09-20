@@ -12,9 +12,10 @@ import (
 )
 
 type StoreImpl struct {
-	mu       sync.Mutex
-	perActor map[id.ActorID]*storeActorState
-	deltaCap int
+	mu        sync.Mutex
+	perActor  map[id.ActorID]*storeActorState
+	deltaCap  int
+	closeOnce sync.Once
 }
 
 type storeActorState struct {
@@ -148,6 +149,25 @@ func (s *StoreImpl) Watch(actorID id.ActorID, opts ...WatchOption) (actor.Subscr
 	as.subscribers = append(as.subscribers, sub)
 	s.mu.Unlock()
 	return sub, nil
+}
+
+// Close tears down every active watch subscription: stops each
+// subscription's batch timer (time.AfterFunc would otherwise fire after
+// shutdown) and releases subscribers. Idempotent. The store itself owns
+// no goroutines; called on App shutdown.
+func (s *StoreImpl) Close() {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		subs := make([]*projectionSubscription, 0, 8)
+		for _, as := range s.perActor {
+			subs = append(subs, as.subscribers...)
+			as.subscribers = nil
+		}
+		s.mu.Unlock()
+		for _, sub := range subs {
+			_ = sub.Close()
+		}
+	})
 }
 
 func (s *StoreImpl) Has(actorID id.ActorID) bool {
