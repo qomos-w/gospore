@@ -127,3 +127,9 @@ breaking release relative to v0.1.x.
 ## v0.1.0
 
 Initial public release.
+
+## v0.3.1 (2026-09-20)
+
+### Fixed
+
+- **web-client TBC magic stranding** (TS twin of the v0.3.0 Go-side fix, authored by Async Mushroom): `session.ts` still welded wire-version 2 into the 4-byte magic, so spore v0.6.0 frames (`TBC`) failed `isTBCPayload` and event subscriptions (self-describing fallback, no codegen schemaId) delivered raw `Uint8Array` to handlers — every pushed-event reader crashed while invoke replies stayed healthy. Preamble-only recognition + `TBC_HEADER_LEN` mirror the Go-side `codec.IsTBCData` semantics; test fixtures bumped to the current version byte. vitest 216/216, tsc clean.
