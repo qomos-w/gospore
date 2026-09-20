@@ -98,10 +98,14 @@ func (s *Server) wireFrameToWsFrame(wire *WireFrame) (*wsFrame, error) {
 	}, nil
 }
 
-var tbcMagic = []byte{0x54, 0x42, 0x43, 0x02} // "TBC\x02"
+// wsTBCPreamble mirrors codec.binaryMagicPreamble: spore >= v0.6.0 splits
+// the TBC header into a 3-byte magic plus an independent version byte;
+// the sniff routes on the preamble only (version semantics belong to the
+// codec backend).
+var wsTBCPreamble = []byte{0x54, 0x42, 0x43} // "TBC"
 
 func isTBCData(data []byte) bool {
-	return len(data) >= len(tbcMagic) && string(data[:len(tbcMagic)]) == string(tbcMagic)
+	return len(data) >= 4 && string(data[:3]) == string(wsTBCPreamble)
 }
 
 func wsFrameToWireFrame(f *wsFrame) (*WireFrame, error) {

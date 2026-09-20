@@ -147,3 +147,28 @@ func TestCodec_DecodeAs_UntypedPayloadRejected(t *testing.T) {
 		t.Fatalf("expected error for EncodingNone, got %+v", got)
 	}
 }
+
+// TestIsTBCData_PreambleOnly pins the spore v0.6.0 contract split: the
+// guard routes on the 3-byte "TBC" preamble regardless of the version
+// byte (v3 current, v2 legacy), and rejects inputs too short to carry
+// preamble+version. Regression for the v2-welded-into-magic stranding
+// that broke sporemind round-trips after the spore bump.
+func TestIsTBCData_PreambleOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"v3 current", []byte{0x54, 0x42, 0x43, 0x03}, true},
+		{"v2 legacy", []byte{0x54, 0x42, 0x43, 0x02}, true},
+		{"future v4", []byte{0x54, 0x42, 0x43, 0x04, 0xAA}, true},
+		{"preamble only, no version byte", []byte{0x54, 0x42, 0x43}, false},
+		{"too short", []byte{0x54, 0x42}, false},
+		{"empty", nil, false},
+		{"json prefix", []byte(`{"x":1}`), false},
+	} {
+		if got := IsTBCData(tc.data); got != tc.want {
+			t.Errorf("%s: IsTBCData = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

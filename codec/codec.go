@@ -21,12 +21,21 @@ import (
 	"github.com/qomos-w/spore/transport"
 )
 
-// tbcMagic is the Spore Binary Codec header.
-var tbcMagic = []byte{0x54, 0x42, 0x43, 0x02} // "TBC\x02"
+// binaryMagicPreamble is the TBC (Spore Binary Codec) frame preamble.
+// spore >= v0.6.0 splits the frame header into this 3-byte magic plus an
+// independent wire-version byte (v2 legacy exists only for precise
+// rejection errors; v3 is current). The version is the codec backend's
+// concern — this sniff routes on the preamble only, so a version bump in
+// spore does not silently strand gospore's guard (it did when v2 was
+// welded into the magic).
+var binaryMagicPreamble = []byte{0x54, 0x42, 0x43} // "TBC"
 
-// IsTBCData reports whether data begins with the TBC binary codec magic.
+// IsTBCData reports whether data begins with the TBC binary codec magic
+// (preamble followed by a version byte). It accepts any version: frames
+// carrying a rejected version are still TBC frames and belong to the
+// binary codec path, which reports the precise version error.
 func IsTBCData(data []byte) bool {
-	return len(data) >= len(tbcMagic) && bytes.Equal(data[:len(tbcMagic)], tbcMagic)
+	return len(data) >= 4 && bytes.Equal(data[:3], binaryMagicPreamble)
 }
 
 // Codec encodes and decodes spore.TypeDesc-annotated values to and
