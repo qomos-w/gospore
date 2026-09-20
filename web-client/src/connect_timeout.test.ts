@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { WebSocketTransport } from "./ws.js";
-import type { WebSocketLike } from "./ws.js";
+import { WebSocketTransport } from "./ws";
+import type { WebSocketLike } from "./ws";
 
 /* A socket that never completes the upgrade handshake: onopen/onerror/onclose
  * never fire, and close() is a no-op. This is the exact failure mode a proxy or

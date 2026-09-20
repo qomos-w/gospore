@@ -12,7 +12,7 @@
  * routes by ActorID rather than the leading-segment service.
  */
 
-import type { InvokeOptions, Transport } from "./transport.js";
+import type { InvokeOptions, Transport } from "./transport";
 
 export interface HTTPTransportOptions {
   /** Base URL for all requests (e.g. "/api/v0"). */

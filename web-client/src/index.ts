@@ -1,22 +1,22 @@
-export { type Transport, type InvokeOptions, type ManagedTransport } from "./transport.js";
-export { GosporeClient, type GosporeClientOptions, type EventsAPI, type EventCancel } from "./client.js";
-export { HTTPTransport, type HTTPTransportOptions } from "./http.js";
-export { WebSocketTransport, type WebSocketTransportOptions, type WebSocketLike, WebSocketFrameConnection } from "./ws.js";
+export { type Transport, type InvokeOptions, type ManagedTransport } from "./transport";
+export { GosporeClient, type GosporeClientOptions, type EventsAPI, type EventCancel } from "./client";
+export { HTTPTransport, type HTTPTransportOptions } from "./http";
+export { WebSocketTransport, type WebSocketTransportOptions, type WebSocketLike, WebSocketFrameConnection } from "./ws";
 export {
   ManagedFrameTransport,
   type FrameConnection,
   type FrameConnectionState,
   type ManagedFrameTransportOptions,
-} from "./frame_transport.js";
+} from "./frame_transport";
 export {
   WailsIpcTransport,
   WailsFrameConnection,
   type WailsIpcTransportOptions,
   type WailsBindings,
-} from "./wails_transport.js";
-export { FrameChannel, SubscriptionIterator, type WithSeqNo, type WireFrame as ChannelWireFrame } from "./channel.js";
-export { WireSession, type WireSessionOptions, type AppFrame } from "./session.js";
-export { type AuthProvider, withAuth, type AuthedTransport, type ManagedAuthedTransport } from "./auth.js";
+} from "./wails_transport";
+export { FrameChannel, SubscriptionIterator, type WithSeqNo, type WireFrame as ChannelWireFrame } from "./channel";
+export { WireSession, type WireSessionOptions, type AppFrame } from "./session";
+export { type AuthProvider, withAuth, type AuthedTransport, type ManagedAuthedTransport } from "./auth";
 export {
   FrameType,
   PayloadEncoding,
@@ -28,8 +28,8 @@ export {
   unmarshalWireFrame,
   type WireFrame as BinaryWireFrame,
   FrameError,
-} from "./binary_frame.js";
-export { compress, decompress, type CompressResult } from "./compression.js";
+} from "./binary_frame";
+export { compress, decompress, type CompressResult } from "./compression";
 export {
   type TypeKind,
   type TypeDesc,
@@ -38,4 +38,4 @@ export {
   type SchemaEntry,
   type BinaryCodecLike,
   type SchemaRegistryLike,
-} from "./schema.js";
+} from "./schema";

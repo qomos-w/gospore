@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { WebSocketTransport } from "./ws.js";
-import type { WebSocketLike } from "./ws.js";
+import { WebSocketTransport } from "./ws";
+import type { WebSocketLike } from "./ws";
 
 /* ------------------------------------------------------------------ */
 /* Deferred-close mock WebSocket                                       */

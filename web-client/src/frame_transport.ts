@@ -20,7 +20,7 @@
  * here, exactly once.
  */
 
-import type { InvokeOptions, ManagedTransport } from "./transport.js";
+import type { InvokeOptions, ManagedTransport } from "./transport";
 import {
   FrameType,
   PayloadEncoding,
@@ -29,11 +29,11 @@ import {
   marshalWireFrame,
   unmarshalWireFrame,
   type WireFrame as BinaryWireFrame,
-} from "./binary_frame.js";
-import { compress } from "./compression.js";
-import type { BinaryCodecLike, SchemaRegistryLike } from "./schema.js";
-import { WireSession, type AppFrame, type TransIdGapKind, type TransIdGapVerdict } from "./session.js";
-import type { WireFrame } from "./channel.js";
+} from "./binary_frame";
+import { compress } from "./compression";
+import type { BinaryCodecLike, SchemaRegistryLike } from "./schema";
+import { WireSession, type AppFrame, type TransIdGapKind, type TransIdGapVerdict } from "./session";
+import type { WireFrame } from "./channel";
 
 /* ------------------------------------------------------------------ */
 /* FrameConnection — IO adapter interface                              */

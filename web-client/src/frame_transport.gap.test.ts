@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { WebSocketTransport } from "./ws.js";
-import type { WebSocketLike } from "./ws.js";
-import type { TransIdGapInfo } from "./frame_transport.js";
+import { WebSocketTransport } from "./ws";
+import type { WebSocketLike } from "./ws";
+import type { TransIdGapInfo } from "./frame_transport";
 
 /* Gap observability: the tolerate policy exists for lossy channels (Wails
  * event bridges). The skip itself is by design, but it must be countable —

@@ -15,8 +15,8 @@
  * The owning WebSocketTransport provides sendAppFrame to handle serialization.
  */
 
-import type { InvokeOptions } from "./transport.js";
-import type { BinaryCodecLike, SchemaRegistryLike, SchemaEntry, ObjectDesc } from "./schema.js";
+import type { InvokeOptions } from "./transport";
+import type { BinaryCodecLike, SchemaRegistryLike, SchemaEntry, ObjectDesc } from "./schema";
 import {
   PayloadEncoding,
   PayloadCompression,
@@ -24,15 +24,15 @@ import {
   getCompression,
   FrameType,
   type WireFrame as BinaryWireFrame,
-} from "./binary_frame.js";
-import { decompress } from "./compression.js";
+} from "./binary_frame";
+import { decompress } from "./compression";
 import {
   FrameChannel,
   SubscriptionIterator,
   type WireFrame,
   type InvokeFrame,
   type SubscribeFrame,
-} from "./channel.js";
+} from "./channel";
 
 /* ------------------------------------------------------------------ */
 /* System-reserved schema IDs, TypeDescs and ObjectDescs               */
@@ -59,7 +59,7 @@ import {
   EVENT_SUBSCRIBE_INSTANCE_REQ_OBJECT,
   PROJECTION_GET_REQ_OBJECT,
   PROJECTION_WATCH_REQ_OBJECT,
-} from "./generated/system_protocol.js";
+} from "./generated/system_protocol";
 
 const sysObjectFor = (classId: number): ((name: string) => ObjectDesc | undefined) => {
   const map = new Map<string, ObjectDesc>();

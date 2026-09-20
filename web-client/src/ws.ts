@@ -11,9 +11,9 @@ import {
   ManagedFrameTransport,
   type FrameConnection,
   type FrameConnectionState,
-} from "./frame_transport.js";
-import type { SchemaRegistryLike, BinaryCodecLike } from "./schema.js";
-import type { TransIdGapInfo } from "./frame_transport.js";
+} from "./frame_transport";
+import type { SchemaRegistryLike, BinaryCodecLike } from "./schema";
+import type { TransIdGapInfo } from "./frame_transport";
 
 /* ------------------------------------------------------------------ */
 /* WebSocketLike — kept for backward compatibility with test mocks      */

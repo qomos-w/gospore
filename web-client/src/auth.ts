@@ -1,4 +1,4 @@
-import type { InvokeOptions, Transport, ManagedTransport } from "./transport.js";
+import type { InvokeOptions, Transport, ManagedTransport } from "./transport";
 
 /**
  * AuthProvider supplies tokens on demand.

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, type Mock } from "vitest";
-import { GosporeClient } from "./client.js";
-import type { Transport, ManagedTransport } from "./transport.js";
+import { GosporeClient } from "./client";
+import type { Transport, ManagedTransport } from "./transport";
 
 /* ------------------------------------------------------------------ */
 /* Stub transports for testing the lifecycle facade                   */

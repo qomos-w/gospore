@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { compress, decompress } from "./compression.js";
+import { compress, decompress } from "./compression";
 
 describe("compression", () => {
   it("round-trips compressible data", async () => {

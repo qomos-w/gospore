@@ -15,8 +15,8 @@ import {
   ManagedFrameTransport,
   type FrameConnection,
   type FrameConnectionState,
-} from "./frame_transport.js";
-import type { SchemaRegistryLike, BinaryCodecLike } from "./schema.js";
+} from "./frame_transport";
+import type { SchemaRegistryLike, BinaryCodecLike } from "./schema";
 
 /* ------------------------------------------------------------------ */
 /* WailsBindings — injected Wails runtime dependencies                 */

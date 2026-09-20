@@ -1,7 +1,7 @@
-import type { InvokeOptions, Transport, ManagedTransport } from "./transport.js";
-import type { WithSeqNo } from "./channel.js";
-import type { AuthProvider } from "./auth.js";
-import { withAuth } from "./auth.js";
+import type { InvokeOptions, Transport, ManagedTransport } from "./transport";
+import type { WithSeqNo } from "./channel";
+import type { AuthProvider } from "./auth";
+import { withAuth } from "./auth";
 
 export interface GosporeClientOptions {
   /** Optional auth provider. When set, tokens are injected into every call. */

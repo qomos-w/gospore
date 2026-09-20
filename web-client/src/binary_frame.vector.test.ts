@@ -5,7 +5,7 @@ import {
   FrameError,
   FrameType,
   type WireFrame,
-} from "./binary_frame.js";
+} from "./binary_frame";
 import vectorJSON from "../testdata/frame_vector.json";
 
 /**

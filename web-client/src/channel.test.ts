@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { FrameChannel, SubscriptionIterator } from "./channel.js";
-import type { InvokeFrame } from "./channel.js";
+import { FrameChannel, SubscriptionIterator } from "./channel";
+import type { InvokeFrame } from "./channel";
 
 /* ------------------------------------------------------------------ */
 

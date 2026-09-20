@@ -10,7 +10,7 @@ import {
   unmarshalWireFrame,
   WireFrame,
   FrameError,
-} from "./binary_frame.js";
+} from "./binary_frame";
 
 describe("binary_frame", () => {
   it("round-trips a minimal frame", () => {

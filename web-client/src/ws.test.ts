@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { WebSocketTransport } from "./ws.js";
-import { PayloadEncoding, makeFlags, marshalWireFrame } from "./binary_frame.js";
-import type { BinaryCodecLike, SchemaEntry, SchemaRegistryLike, TypeDesc } from "./schema.js";
+import { WebSocketTransport } from "./ws";
+import { PayloadEncoding, makeFlags, marshalWireFrame } from "./binary_frame";
+import type { BinaryCodecLike, SchemaEntry, SchemaRegistryLike, TypeDesc } from "./schema";
 
 /* ------------------------------------------------------------------ */
 /* Mock WebSocket + CloseEvent for Node/vitest environment            */

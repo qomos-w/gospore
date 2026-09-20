@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { WireSession } from "./session.js";
-import { FrameType, PayloadEncoding, PayloadCompression, makeFlags } from "./binary_frame.js";
-import type { WireFrame as BinaryWireFrame } from "./binary_frame.js";
+import { WireSession } from "./session";
+import { FrameType, PayloadEncoding, PayloadCompression, makeFlags } from "./binary_frame";
+import type { WireFrame as BinaryWireFrame } from "./binary_frame";
 
 /* ------------------------------------------------------------------ */
 

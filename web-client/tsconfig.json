@@ -14,6 +14,7 @@
     "exactOptionalPropertyTypes": false,
 
     "rootDir": "./src",
+    "noEmit": true,
 
     "esModuleInterop": true,
     "resolveJsonModule": true,

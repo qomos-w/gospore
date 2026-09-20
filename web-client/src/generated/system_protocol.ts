@@ -1,6 +1,6 @@
 // AUTO-GENERATED from gospore schema/builtin.go — DO NOT EDIT.
 // Regenerate: go test ./internal/wiregen -update
-import type { TypeDesc, ObjectDesc } from "../schema.js";
+import type { TypeDesc, ObjectDesc } from "../schema";
 
 export const SYS_AUTH_REQ = 64;
 export const SYS_AUTH_OK = 65;
