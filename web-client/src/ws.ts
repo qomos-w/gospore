@@ -147,7 +147,7 @@ export interface WebSocketTransportOptions {
   createSocket?: (url: string) => WebSocketLike;
   getUrl?: () => string;
   getAuthToken?: () => string | null;
-  onAuthFailure?: () => void;
+  onAuthFailure?: (err: Error) => void;
   lazyConnect?: boolean;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;

@@ -204,10 +204,11 @@ describe("WireSession", () => {
   it("rejects auth on error frame with no reqId", async () => {
     const sent: unknown[] = [];
     let authFailureFired = false;
+    let authFailureErr: Error | null = null;
 
     const session = new WireSession({
       sendFrame: (frame) => { sent.push(frame); return true; },
-      onAuthFailure: () => { authFailureFired = true; },
+      onAuthFailure: (err) => { authFailureFired = true; authFailureErr = err; },
       invokeTimeoutMs: 5000,
     });
 
@@ -217,6 +218,7 @@ describe("WireSession", () => {
 
     await expect(authPromise).rejects.toThrow("unauthorized");
     expect(authFailureFired).toBe(true);
+    expect((authFailureErr as Error | null)?.message).toBe("unauthorized");
   });
 
   it("builds callable schema cache from auth_ok manifest", async () => {

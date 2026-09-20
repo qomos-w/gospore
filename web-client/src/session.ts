@@ -125,8 +125,9 @@ export interface WireSessionOptions {
   /** Return the current auth token. When set, an auth handshake is sent
    *  after the socket opens. */
   getAuthToken?: () => string | null;
-  /** Called when the server rejects the auth handshake. */
-  onAuthFailure?: () => void;
+  /** Called when the server rejects the auth handshake; receives the
+   *  server-stated reason (or "auth handshake timeout"). */
+  onAuthFailure?: (err: Error) => void;
   /** When true, reject JSON fallback paths. */
   binaryOnly?: boolean;
   /** Schema registry for binary codec type lookups. */
@@ -167,7 +168,7 @@ export class WireSession {
   private binaryCodec?: BinaryCodecLike;
   private invokeTimeoutMs: number;
 
-  private onAuthFailure?: () => void;
+  private onAuthFailure?: (err: Error) => void;
   private onTransIdGap?: (kind: TransIdGapKind, got: bigint, expected: bigint) => TransIdGapVerdict;
   private onAuthReady?: () => void;
   private closeOnAuthFailure?: () => void;
@@ -321,9 +322,10 @@ export class WireSession {
     });
 
     this.authTimeoutTimer = setTimeout(() => {
-      this.authReject?.(new Error("auth handshake timeout"));
+      const err = new Error("auth handshake timeout");
+      this.authReject?.(err);
       this.cleanupAuth();
-      this.onAuthFailure?.();
+      this.onAuthFailure?.(err);
       this.closeOnAuthFailure?.();
     }, 5000);
 
@@ -442,10 +444,10 @@ export class WireSession {
       case "error": {
         // If auth is pending and no reqId, treat as auth failure.
         if (this.authPromise && !frame.reqId) {
-          const msg = frame.message ?? "auth failed";
-          this.authReject?.(new Error(msg));
+          const err = new Error(frame.message ?? "auth failed");
+          this.authReject?.(err);
           this.cleanupAuth();
-          this.onAuthFailure?.();
+          this.onAuthFailure?.(err);
           this.closeOnAuthFailure?.();
           break;
         }

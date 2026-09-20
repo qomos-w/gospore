@@ -73,7 +73,7 @@ export interface ManagedFrameTransportOptions {
   url: string;
   getUrl?: () => string;
   getAuthToken?: () => string | null;
-  onAuthFailure?: () => void;
+  onAuthFailure?: (err: Error) => void;
   lazyConnect?: boolean;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
@@ -206,7 +206,13 @@ export class ManagedFrameTransport implements ManagedTransport {
     this.session = new WireSession({
       sendFrame: (frame) => this.sendAppFrame(frame),
       getAuthToken: options.getAuthToken,
-      onAuthFailure: options.onAuthFailure,
+      // Reject the open promise with the server-stated reason before
+      // closeOnAuthFailure's generic "connection closed" rejection can win —
+      // waitUntilReady callers must see *why* auth failed.
+      onAuthFailure: (err) => {
+        this.rejectOpenPromise(err);
+        options.onAuthFailure?.(err);
+      },
       binaryOnly: this.binaryOnly,
       schemaRegistry: this.schemaRegistry,
       binaryCodec: this.binaryCodec,
