@@ -72,19 +72,24 @@ const sysObjectFor = (classId: number): ((name: string) => ObjectDesc | undefine
   return (name: string) => map.get(name);
 };
 
-// TBC magic
-const TBC_MAGIC = new Uint8Array([0x54, 0x42, 0x43, 0x02]);
+// TBC magic preamble. The wire format split the version out of the magic
+// (spore v0.6.0 / #17): every frame now starts with "TBC" + an explicit
+// version byte, so recognition must check the 3-byte preamble only.
+// Version semantics belong to the codec backend, mirroring the Go-side
+// gospore codec.IsTBCData preamble fix.
+const TBC_MAGIC = new Uint8Array([0x54, 0x42, 0x43]);
+const TBC_HEADER_LEN = TBC_MAGIC.length + 1; // preamble + version byte
 const TAG_STRUCT = 0x0c;
 
 function isTBCPayload(data: Uint8Array): boolean {
-  return data.length >= 4 && data[0] === TBC_MAGIC[0] && data[1] === TBC_MAGIC[1] && data[2] === TBC_MAGIC[2] && data[3] === TBC_MAGIC[3];
+  return data.length >= TBC_HEADER_LEN && data[0] === TBC_MAGIC[0] && data[1] === TBC_MAGIC[1] && data[2] === TBC_MAGIC[2];
 }
 
 function tbcStructSchemaId(data: Uint8Array): number {
-  if (data.length < 5) return 0;
-  if (data[0] !== TBC_MAGIC[0] || data[1] !== TBC_MAGIC[1] || data[2] !== TBC_MAGIC[2] || data[3] !== TBC_MAGIC[3]) return 0;
-  if (data[4] !== TAG_STRUCT) return 0;
-  let off = 5;
+  if (data.length < TBC_HEADER_LEN + 1) return 0;
+  if (data[0] !== TBC_MAGIC[0] || data[1] !== TBC_MAGIC[1] || data[2] !== TBC_MAGIC[2]) return 0;
+  if (data[TBC_HEADER_LEN] !== TAG_STRUCT) return 0;
+  let off = TBC_HEADER_LEN + 1;
   let result = 0;
   let shift = 0;
   while (off < data.length) {

@@ -5,7 +5,7 @@ import type { WireFrame as BinaryWireFrame } from "./binary_frame.js";
 
 /* ------------------------------------------------------------------ */
 
-const TBC_MAGIC = new Uint8Array([0x54, 0x42, 0x43, 0x02]);
+const TBC_MAGIC = new Uint8Array([0x54, 0x42, 0x43, 0x03]); // preamble + current wire version
 
 function mockEncode(value: unknown): Uint8Array {
   const body = new TextEncoder().encode(JSON.stringify(value));
