@@ -36,6 +36,7 @@
 
 ### Fixed
 
+- **TBC magic stranding on spore v0.6.0** (reported by Async Mushroom from sporemind round-trip failures): `codec.IsTBCData` and the gateway WS binary sniff welded wire-version 2 into a 4-byte magic, so v0.6.0-encoded frames (`TBC\x03…`) were rejected by gospore's own guard. Both now route on the 3-byte `"TBC"` preamble (version byte present); version semantics belong to the spore codec backend (v2 exists there only for precise rejection errors) — a future version bump can no longer silently strand the guard. Pinned by `TestIsTBCData_PreambleOnly`. Also bumps spore to v0.6.0 (registry consolidation — zero direct calls on our side; wireVersion transport+TS dual-sided).
 - **Planner/`Final` cancellation cause preserved** (reported from a live sporemind pause incident): consuming-context cancellation surfaced as the bare `invoke.ErrCallCancelled` sentinel, defeating downstream `errors.Is(err, context.Canceled)` classification (a pause was misread as a tool failure / retryable stream error). `planner.Stream` now rejects with `ctx.Err()` when the sentinel arrives with a cancelled consumer context; `Final`'s translation no longer requires the fallback-deadline gate (the io.EOF branch keeps it — EOF is also the legitimate void-End shape). Pinned by `TestPlannerCancel_RejectsWithContextCause`.
 - **`gateway.Server.ReadyChan` data race**: lazy channel initialization
   raced `Run`'s close; the channel is now created eagerly in
