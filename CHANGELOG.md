@@ -128,3 +128,9 @@ breaking release relative to v0.1.x.
 ## v0.1.0
 
 Initial public release.
+
+## v0.3.2 (2026-09-20)
+
+### Changed
+
+- **web-client stops in-place tsc emit** (root cause of the v13.04 packaging incident, analyzed by Async Mushroom): tsconfig sets `noEmit` (matching the existing build/check scripts and spore/ts) and all relative imports drop the `.js` suffix, so no compiled `.js` siblings exist for consumer bundlers to resolve by suffix — a stale sibling was exactly how the packaged exe kept the old session.js after the source fix. Side finding: vitest had been double-collecting the compiled `.test.js` siblings (reported 20 files/216 tests), the real suite is 10 files/108 tests, all green; tsc clean.
