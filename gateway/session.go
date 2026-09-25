@@ -178,11 +178,11 @@ func (sess *session) run(ctx context.Context) {
 	}
 
 	// Subscription registry.
-	subs := &subscriptionMap{m: make(map[string]context.CancelFunc)}
+	subs := &subscriptionMap{m: make(map[string]subEntry)}
 	defer func() {
 		subs.Lock()
-		for _, c := range subs.m {
-			c()
+		for _, e := range subs.m {
+			e.cancel()
 		}
 		subs.Unlock()
 		subs.wg.Wait()
@@ -224,8 +224,8 @@ func (sess *session) run(ctx context.Context) {
 					sess.handleSubscribe(ctx, msg.frame, subs)
 				case "unsubscribe":
 					subs.Lock()
-					if c, ok := subs.m[msg.frame.SubID]; ok {
-							c()
+					if e, ok := subs.m[msg.frame.SubID]; ok {
+						e.cancel()
 						delete(subs.m, msg.frame.SubID)
 					}
 					subs.Unlock()
@@ -401,8 +401,19 @@ func subscribeShardIndex(subID string) uint32 {
 // subscriptionMap is the shared subscription registry type.
 type subscriptionMap struct {
 	sync.Mutex
-	m  map[string]context.CancelFunc
-	wg sync.WaitGroup
+	m   map[string]subEntry
+	seq uint64
+	wg  sync.WaitGroup
+}
+
+// subEntry ties one registry slot to the identity of its latest
+// registration. Resubscribing the same SubID cancels the displaced entry
+// and installs a new one; the displaced pump's exit must not delete the
+// newer registration (delete-by-key would strand it without a cancel,
+// wedging session teardown in wg.Wait forever).
+type subEntry struct {
+	cancel context.CancelFunc
+	id     uint64
 }
 
 func (sess *session) handleSubscribe(ctx context.Context, f wsFrame, subs *subscriptionMap) {
@@ -441,7 +452,18 @@ func (sess *session) handleSubscribe(ctx context.Context, f wsFrame, subs *subsc
 
 	subCtx, cancel := context.WithCancel(ctx)
 	subs.Lock()
-	subs.m[f.SubID] = cancel
+	// Resubscribe with the same SubID displaces the previous subscription's
+	// cancel from the registry. Fire the displaced cancel now: nothing else
+	// ever will (the session teardown loop only walks entries still in the
+	// map, and the request ctx cancels only after ServeSession returns —
+	// which itself waits on this very wg). Leaving it unfired wedges the old
+	// pump in RecvRaw forever and deadlocks session teardown in wg.Wait.
+	if prev, ok := subs.m[f.SubID]; ok {
+		prev.cancel()
+	}
+	subs.seq++
+	entry := subEntry{cancel: cancel, id: subs.seq}
+	subs.m[f.SubID] = entry
 	subs.Unlock()
 
 	call, err := s.beginSubscription(subCtx, sess.gateRef, f.CallID, f.Target, f.From, payload, sess.opts.CustomerID, sess.role, sess.subject)
@@ -451,7 +473,9 @@ func (sess *session) handleSubscribe(ctx context.Context, f wsFrame, subs *subsc
 		}
 		cancel()
 		subs.Lock()
-		delete(subs.m, f.SubID)
+		if cur, ok := subs.m[f.SubID]; ok && cur.id == entry.id {
+			delete(subs.m, f.SubID)
+		}
 		subs.Unlock()
 		sess.send(wsFrame{Type: "error", ReqID: f.ReqID, Message: err.Error()})
 		return
@@ -468,7 +492,12 @@ func (sess *session) handleSubscribe(ctx context.Context, f wsFrame, subs *subsc
 				s.logger.Info("gateway: session subscribe goroutine EXIT", "callID", f.CallID, "subId", f.SubID)
 			}
 			subs.Lock()
-			delete(subs.m, f.SubID)
+			// Delete only when this slot still belongs to this
+			// registration: a resubscribe has since displaced us, and
+			// removing the newer entry would strand it without a cancel.
+			if cur, ok := subs.m[f.SubID]; ok && cur.id == entry.id {
+				delete(subs.m, f.SubID)
+			}
 			subs.Unlock()
 			cancel()
 			subs.wg.Done()

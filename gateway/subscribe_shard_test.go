@@ -177,3 +177,44 @@ func TestSubscribeSameSubIdKeepsOrder(t *testing.T) {
 	}
 
 }
+
+// TestSubscribeSameSubIdOverwriteThenDisconnect pins the resubscribe
+// overwrite path: a second subscribe with the same subId (no unsubscribe in
+// between) displaces the first subscription's registry entry. The displaced
+// cancel must fire so the old pump exits; otherwise closing the connection
+// leaves the old streaming handler live forever and wedges session teardown
+// in subs.wg.Wait (observed in production as hundreds of parked
+// session.go RecvRaw pumps plus stuck ServeSession goroutines).
+func TestSubscribeSameSubIdOverwriteThenDisconnect(t *testing.T) {
+	env := newShardEnv(t)
+	defer env.shut()
+
+	conn := dialRepro(t, env.addr)
+
+	// Two subscribes for one subId, no unsubscribe in between.
+	writeJSON(t, conn, subscribeFrame("ovr-1"))
+	writeJSON(t, conn, subscribeFrame("ovr-1"))
+
+	// Both handler starts must have happened: the overwrite cancels the
+	// first subscription but the second still establishes.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && env.root.starts.Load() < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s := env.root.starts.Load(); s != 2 {
+		conn.Close()
+		t.Fatalf("expected 2 handler starts, got %d", s)
+	}
+
+	// Abrupt disconnect. Every streaming handler — including the displaced
+	// one — must drain to zero once teardown unwinds.
+	conn.Close()
+
+	drain := time.Now().Add(8 * time.Second)
+	for time.Now().Before(drain) && env.root.live.Load() > 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if l := env.root.live.Load(); l != 0 {
+		t.Fatalf("streaming handlers leaked after disconnect: %d still live", l)
+	}
+}

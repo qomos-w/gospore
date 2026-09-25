@@ -20,14 +20,24 @@ import (
 type replyRegistry struct {
 	pending *invoke.PendingTable
 
-	mu       sync.Mutex
-	emitters map[uint64]func() // CorID -> cancel func
+	mu        sync.Mutex
+	emitters  map[uint64]func() // CorID -> cancel func
+	earlyCxl  map[uint64]struct{}
+	earlyFifo []uint64
 }
+
+// earlyCancelMemoCap bounds the memo of KindCancel frames that arrived
+// before their invocation started. Such frames travel the reply lane while
+// the invocation envelope may still be queued on its dispatch lane, so no
+// ordering guarantee exists; the memo closes the race. CorIDs are never
+// reused, so stale entries are pure memory — the FIFO cap evicts.
+const earlyCancelMemoCap = 4096
 
 func newReplyRegistry(pt *invoke.PendingTable) *replyRegistry {
 	return &replyRegistry{
 		pending:  pt,
 		emitters: make(map[uint64]func()),
+		earlyCxl: make(map[uint64]struct{}),
 	}
 }
 
@@ -42,10 +52,19 @@ func (r *replyRegistry) deliver(frame message.Frame) bool {
 }
 
 // registerCancel records a cancel function for an in-flight streaming call.
+// If a KindCancel for this CorID already arrived (cancel-before-start
+// race), the recorded function fires immediately so the handler observes
+// emit.Done() the moment it starts instead of running forever for a
+// consumer that already cancelled.
 func (r *replyRegistry) registerCancel(corID uint64, cancel func()) {
 	r.mu.Lock()
 	r.emitters[corID] = cancel
+	_, early := r.earlyCxl[corID]
+	delete(r.earlyCxl, corID)
 	r.mu.Unlock()
+	if early && cancel != nil {
+		cancel()
+	}
 }
 
 // unregisterCancel removes the cancel function for a completed call.
@@ -56,11 +75,24 @@ func (r *replyRegistry) unregisterCancel(corID uint64) {
 }
 
 // cancel invokes and removes the cancel function for corID, if any.
-// Returns true when a cancel function was found and invoked.
+// When no emitter is registered yet, the CorID is memoized so a late
+// registerCancel still observes the cancellation. Returns true when a
+// cancel function was found and invoked.
 func (r *replyRegistry) cancel(corID uint64) bool {
 	r.mu.Lock()
 	cancel, ok := r.emitters[corID]
 	delete(r.emitters, corID)
+	if !ok {
+		if _, seen := r.earlyCxl[corID]; !seen {
+			r.earlyCxl[corID] = struct{}{}
+			r.earlyFifo = append(r.earlyFifo, corID)
+			if len(r.earlyFifo) > earlyCancelMemoCap {
+				drop := r.earlyFifo[0]
+				r.earlyFifo = r.earlyFifo[1:]
+				delete(r.earlyCxl, drop)
+			}
+		}
+	}
 	r.mu.Unlock()
 	if ok && cancel != nil {
 		cancel()
@@ -82,6 +114,8 @@ func (r *replyRegistry) clear() {
 		cancels = append(cancels, cancel)
 		delete(r.emitters, corID)
 	}
+	clear(r.earlyCxl)
+	r.earlyFifo = r.earlyFifo[:0]
 	r.mu.Unlock()
 	for _, cancel := range cancels {
 		if cancel != nil {
