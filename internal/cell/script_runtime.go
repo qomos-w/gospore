@@ -177,7 +177,10 @@ func newScriptRuntimeOwner(c codec.Codec, cx nativeCellContext) *scriptRuntimeOw
 }
 
 // ensureRuntime lazily creates a Spore Runtime for this Cell.
-// Called before loadSporeModule and invoke.
+// Called before loadSporeModule and invoke. Creating a Runtime allocates
+// the VM heap eagerly, so cells that never run spore code must not pay
+// for one — component slots recorded by bindActorComponents before the
+// first real spore use are bound here, at creation time.
 func (o *scriptRuntimeOwner) ensureRuntime() error {
 	if o.spore != nil {
 		return nil
@@ -188,6 +191,9 @@ func (o *scriptRuntimeOwner) ensureRuntime() error {
 	}
 	o.spore = rt
 	o.sporeYields = map[string]int{}
+	if err := o.bindComponentSlotsLocked(); err != nil {
+		return fmt.Errorf("script component bindings: %w", err)
+	}
 	return nil
 }
 
@@ -205,13 +211,18 @@ func (o *scriptRuntimeOwner) setSporeRuntime(rt *script.Runtime) {
 // Non-struct slots (e.g. scalar component fields) are silently skipped —
 // they participate in projection via SnapshotOfSlots but do not need a
 // Spore struct binding.
+//
+// The slots are only recorded when no Runtime exists yet: the binding is
+// applied at the first real spore use (ensureRuntime / loadSporeModule).
+// Creating the Runtime here would allocate a VM heap for every
+// component-bearing cell, used or not.
 func (o *scriptRuntimeOwner) bindActorComponents(slots []projection.ComponentSlot) error {
 	if o == nil || len(slots) == 0 {
 		return nil
 	}
 	o.componentSlots = slots
-	if err := o.ensureRuntime(); err != nil {
-		return err
+	if o.spore == nil {
+		return nil
 	}
 	return o.bindComponentSlotsLocked()
 }
