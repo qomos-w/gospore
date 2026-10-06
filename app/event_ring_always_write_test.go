@@ -76,6 +76,69 @@ func TestEventRing_AlwaysWritesIdle(t *testing.T) {
 	}
 }
 
+// TestEventRing_EvictedOnActorDestroy pins the eviction half of the
+// retention contract: a ring lives exactly as long as its actor. When
+// the Cell's destroy core runs, events.Remove drops the actor's ring so
+// transient Plan nodes and stopped actors pin no history — while rings
+// of live actors (here: the root) are untouched.
+func TestEventRing_EvictedOnActorDestroy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	a, err := New(
+		WithNamespace("apphist3"),
+		WithRootActor(func() actor.Actor { return &ringHistoryActor{} }),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	time.Sleep(150 * time.Millisecond)
+
+	impl := a.(*appImpl)
+
+	childRef, err := a.Spawn(actor.PropsFromFunc(func() actor.Actor { return &actor.Host{} }), "child")
+	if err != nil {
+		t.Fatalf("spawn child: %v", err)
+	}
+	childID := childRef.ID()
+
+	// The child's WatchStarted must land (always-write, no subscriber).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if recs := impl.eventsStore.Recent(childID, 0, []actor.WatchKind{actor.WatchStarted}, 1); len(recs) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for child WatchStarted in ring")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := impl.tree.Destroy(childRef); err != nil {
+		t.Fatalf("destroy child: %v", err)
+	}
+
+	// After destroy the child's ring must be gone entirely.
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		if recs := impl.eventsStore.Recent(childID, 0, nil, 1); recs == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child ring still present after destroy — eviction-on-destroy missing")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The live root's ring is unaffected.
+	if recs := impl.eventsStore.Recent(a.Self().ID(), 0, []actor.WatchKind{actor.WatchStarted}, 1); len(recs) == 0 {
+		t.Fatal("root ring lost WatchStarted after child destroy")
+	}
+}
+
 // TestEmitEvent_LandsInRing pins the user-event half of the contract:
 // ctx.EmitEvent reaches the bus (existing tests) AND leaves a
 // WatchUserEvent record carrying the registered kind name, so idle-period

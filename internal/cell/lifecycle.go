@@ -182,6 +182,13 @@ func (c *Cell) handleDestroy() {
 // cellStopped idempotency gate.
 func (c *Cell) destroyCore() {
 	c.emitLifecycleEvent(actor.WatchTerminated)
+	// The actor is gone: its retention ring and lingering store
+	// subscribers must not outlive it. Every transient Plan node funnels
+	// through here, so skipping this eviction pins one full-capacity
+	// ring per call node until App shutdown.
+	if c.events != nil {
+		c.events.Remove(c.self.ID())
+	}
 	c.state.Store(cellStopped)
 	c.notifyStartOutcome()
 	// The reply pipeline is gone, so replies for this actor's in-flight

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Events ring retention leak (GC pressure)**: `events.StoreImpl.perActor` was never pruned — every actor that ever emitted, including every transient Plan node, pinned a full-capacity ring (256 × ~213 B ≈ 54 KB) until App shutdown. A live sporemind profile showed ~4.6k dead-actor rings / ~255 MB live heap driving ~46% of all CPU samples into GC mark work. `Cell.destroyCore` now calls the new `events.StoreImpl.Remove(actorID)`, evicting the ring and closing lingering store subscribers (which previously stayed parked forever on a stream that could never produce another record). Rings are additionally allocated lazily on first `Push`, so subscribe-only touches (e.g. watching an already-terminated actor) never allocate one; `Recent`/`Subscribe` replay on a bare entry is nil-safe and `RingStats` skips ring-less entries. Always-write semantics for live actors are unchanged (idle-period gap replay still pinned by `TestEventRing_AlwaysWritesIdle`); the eviction half is pinned by `TestEventRing_EvictedOnActorDestroy` plus `events/store_remove_test.go`. Stale doc comments on `events.Store.HasSubscribers` / `CellConfig.Events` claiming a HasSubscribers Tier-0 gate on events (reverted in favor of always-write) were corrected; ARCHITECTURE.md §4.22 / zh-CN §4.23 document eviction-on-destroy.
+
 ## v0.5.0 (2026-09-20)
 
 ### Added

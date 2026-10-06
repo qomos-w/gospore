@@ -68,7 +68,10 @@ type Store interface {
 	// transitions to live delivery.
 	Subscribe(actorID id.ActorID, sinceSeqNo uint64, kinds []actor.WatchKind) (actor.Subscription[Record], error)
 
-	// HasSubscribers is the Tier-0 hint — when no one is subscribed
-	// for an actor, the Cell skips Record allocation entirely.
+	// HasSubscribers reports whether the actor currently has any live
+	// subscriber. Informational for the events channel: Records are
+	// written to the ring regardless of subscribers (always-write
+	// contract, ARCHITECTURE.md §4.22) so gap replay across
+	// subscriber-free windows keeps working.
 	HasSubscribers(actorID id.ActorID) bool
 }

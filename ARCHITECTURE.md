@@ -251,6 +251,8 @@ Each actor has one `events.Ring` (default 256, override via `WithEventRingCapaci
 
 **Always-write contract**: ring history is written regardless of live subscribers — lifecycle (`emitLifecycleEvent`) and callable (`emitCallableEvent`) records land even during idle periods, so gap replay across subscriber-free windows works. `ctx.EmitEvent` (user events) additionally records a `WatchUserEvent` entry whose `Event` field carries the registered kind name; the payload itself travels on the event bus (the ring keeps metadata only, mirroring how invoke records store CallID but not arguments). Chatty actors churn a 256-entry ring correspondingly — `RingStats`/`events.stats` exposes per-actor `Evicted` counters.
 
+**Eviction-on-destroy**: a ring lives exactly as long as its actor. Cell destroy-core calls `events.Remove(actorID)`, dropping the ring and closing lingering store subscribers — transient Plan nodes and stopped actors pin no history. Subscribe to a terminated actor recreates a bare entry with no ring (replay yields nothing; the stream stays empty). Rings are allocated lazily on first Push, so subscribe-only touches never allocate one.
+
 **RemoteSink contract**: dispatch happens *outside* the store lock — the sink is invoked concurrently and potentially out of order; implementations must be non-blocking, safe for concurrent use, and buffer internally if ordering matters.
 
 ### 4.23 Timer Wheel (timer infrastructure)

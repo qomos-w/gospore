@@ -52,15 +52,25 @@ func NewStore(ringCap int) *StoreImpl {
 	}
 }
 
+// getOrCreateLocked returns the actor's state entry, creating a bare one
+// on first touch. The ring itself is allocated lazily on the first Push:
+// an actor that is only ever Subscribed to (e.g. a client watching an
+// already-terminated actor) must not pin a full-capacity ring.
 func (s *StoreImpl) getOrCreateLocked(actorID id.ActorID) *actorState {
 	as, ok := s.perActor[actorID]
 	if !ok {
-		as = &actorState{
-			ring: NewRing(s.ringCap),
-		}
+		as = &actorState{}
 		s.perActor[actorID] = as
 	}
 	return as
+}
+
+// ensureRingLocked returns the actor's ring, allocating it on first write.
+func (s *StoreImpl) ensureRingLocked(as *actorState) *Ring {
+	if as.ring == nil {
+		as.ring = NewRing(s.ringCap)
+	}
+	return as.ring
 }
 
 // Push adds a Record to the actor's ring and fans out to active subscribers.
@@ -69,9 +79,10 @@ func (s *StoreImpl) getOrCreateLocked(actorID id.ActorID) *actorState {
 func (s *StoreImpl) Push(actorID id.ActorID, rec Record) {
 	s.mu.Lock()
 	as := s.getOrCreateLocked(actorID)
+	ring := s.ensureRingLocked(as)
 	as.nextSeqNo++
 	rec.SeqNo = as.nextSeqNo
-	as.ring.Push(rec)
+	ring.Push(rec)
 
 	for _, sub := range as.subscribers {
 		if len(sub.kinds) > 0 && !kindsMatch(sub.kinds, rec.Kind) {
@@ -152,6 +163,32 @@ func (s *StoreImpl) Subscribe(actorID id.ActorID, sinceSeqNo uint64, kinds []act
 	return sub, nil
 }
 
+// Remove evicts an actor's ring and terminates its active subscribers.
+// The Cell's terminal cleanup calls it on destroy so retention rings
+// never outlive their actor — without it, every actor that ever emitted
+// (including every transient Plan node) pins a full-capacity ring until
+// App shutdown.
+//
+// Subscribe-after-Remove recreates a bare entry with no ring: replay
+// yields nothing and the stream stays empty (the actor is terminated).
+// Idempotent and safe concurrently with Push / Subscribe.
+func (s *StoreImpl) Remove(actorID id.ActorID) {
+	s.mu.Lock()
+	as, ok := s.perActor[actorID]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.perActor, actorID)
+	subs := as.subscribers
+	as.subscribers = nil
+	s.mu.Unlock()
+
+	for _, sub := range subs {
+		_ = sub.Close()
+	}
+}
+
 // RingStat is one actor's retention-ring snapshot, surfaced via
 // gospore.events.stats so silent history loss (Evicted > 0) is
 // observable instead of only manifesting as subscriber gap markers.
@@ -169,6 +206,9 @@ func (s *StoreImpl) RingStats() []RingStat {
 	s.mu.Lock()
 	out := make([]RingStat, 0, len(s.perActor))
 	for actorID, as := range s.perActor {
+		if as.ring == nil {
+			continue
+		}
 		out = append(out, RingStat{
 			ActorID:  actorID,
 			Len:      as.ring.Len(),

@@ -207,8 +207,10 @@ type Config struct {
 	// When nil, no observations are emitted.
 	Monitor Monitor
 	// Events is the events store for lifecycle and callable event emission.
-	// Optional; when nil, no events are emitted. When non-nil, the Cell
-	// checks HasSubscribers before Record creation.
+	// Optional; when nil, no events are emitted. Records are always
+	// written regardless of subscribers (idle-period gap replay); the
+	// Cell evicts the actor's ring via Remove on destroy so rings never
+	// outlive their actor.
 	Events *events.StoreImpl
 	// Projections is the state-channel store. Optional; when nil, projection
 	// snapshots are not published and projection Tier-0 gating is disabled.

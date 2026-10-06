@@ -247,7 +247,7 @@ ScriptBridge 把宿主能力以 spore Capability 组暴露给脚本，五个命�
 
 ### 4.23 Events Channel
 
-每 actor 一个 `events.Ring`（默认 256，`WithEventRingCapacity` 覆盖）：invoke / lifecycle / watch 元数据 Record 按 SeqNo 追加。`subscribe_service` / `subscribe_instance` 订阅；`since` 参数实现断线补全，客户端在 live-only / replay-then-live / gap 三 regime 间自动切换。Record 不内嵌 actor 身份（订阅维度已决定归属）。RemoteSink 是跨进程推送的预留缝（非阻塞契约由实现方保证）。
+每 actor 一个 `events.Ring`（默认 256，`WithEventRingCapacity` 覆盖）：invoke / lifecycle / watch 元数据 Record 按 SeqNo 追加。`subscribe_service` / `subscribe_instance` 订阅；`since` 参数实现断线补全，客户端在 live-only / replay-then-live / gap 三 regime 间自动切换。Record 不内嵌 actor 身份（订阅维度已决定归属）。RemoteSink 是跨进程推送的预留缝（非阻塞契约由实现方保证）。ring 与 actor 同生命周期：Cell 销毁路径调用 `events.Remove(actorID)` 回收 ring 并关闭残留订阅（临时 Plan 节点与已停 actor 不保留历史）；ring 在首次 Push 时才分配，纯订阅触碰不分配。
 
 ### 4.24 Timer Wheel（定时器基础设施）
 
