@@ -81,6 +81,9 @@ type Server struct {
 	// this Server accepts (ws sessions, SSE, per-request unary HTTP).
 	gateSeq atomic.Uint64
 
+	// sessions tracks live ServeSession connections (see sessions.go).
+	sessions sessionRegistry
+
 	wsTimeouts WSTimeouts
 }
 

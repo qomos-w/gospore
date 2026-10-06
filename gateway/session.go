@@ -61,6 +61,11 @@ type session struct {
 	// failed and the legacy root-caller path is used.
 	gateRef ref.Ref
 
+	// regEntry is this session's slot in the Server's live-session
+	// registry. Written once in run before any worker starts; the auth
+	// frame path rewrites its identity in place.
+	regEntry *sessionEntry
+
 	transID   atomic.Int64
 	useBinary bool
 
@@ -145,6 +150,17 @@ func (sess *session) run(ctx context.Context) {
 			s.logger.Info("gateway: session ended", "role", sess.role, "subject", sess.subject)
 		}
 	}()
+
+	// Track the live session so the host can enumerate connected clients.
+	// Registered before the gatesession spawn so no inbound frame (auth or
+	// invoke) can arrive ahead of the entry; removed when run returns.
+	sess.regEntry = s.sessions.add(SessionInfo{
+		Kind:      "ws",
+		Role:      sess.role,
+		Subject:   sess.subject,
+		StartedAt: time.Now(),
+	})
+	defer s.sessions.remove(sess.regEntry)
 
 	// Dedicated gatesession caller cell for this connection. Spawned on
 	// the accept goroutine (µs-ms; never inside an actor lane) before
@@ -313,6 +329,7 @@ func (sess *session) handleAuthFrame(ctx context.Context, f wsFrame, authCancel 
 	if authSubject != "" {
 		sess.role = authRole
 		sess.subject = authSubject
+		s.sessions.updateIdentity(sess.regEntry, authRole, authSubject)
 	}
 	if s.logger != nil {
 		s.logger.Info("gateway: session auth ok", "role", sess.role, "subject", sess.subject)
