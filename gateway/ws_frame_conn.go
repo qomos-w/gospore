@@ -173,6 +173,17 @@ func newWsFrameConnTuned(conn *websocket.Conn, logger actor.Logger, binaryOnly b
 		writeTimeout:     t.writeTimeout,
 		pingWriteTimeout: t.pingWriteTimeout,
 	}
+	// RFC 6455 keepalive: the peer answers server pings with pong control
+	// frames, which ReadMessage never surfaces — extend the read deadline on
+	// every pong (and ping) so a connection that is alive at the control-frame
+	// level is never dropped for lack of data frames. Without this the
+	// deadline set at the last data read expires absolutely and idle peers are
+	// disconnected every readIdle (observed as a ~90s cycle on the glass
+	// session: 2026-10-10).
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(c.readIdle))
+		return nil
+	})
 	go c.writeLoop()
 	go c.pingLoop()
 	return c
