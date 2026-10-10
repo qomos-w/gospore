@@ -327,3 +327,35 @@ func TestWsFrameConn_SendSucceedsWithReader(t *testing.T) {
 		}
 	}
 }
+
+// TestWsFrameConn_PongExtendsReadDeadline pins the RFC 6455 keepalive
+// contract: a peer that answers server pings but sends no data frames must
+// NOT be dropped by the read-idle deadline (2026-10-10 glass session idle
+// closes every ~90s). The gorilla client auto-pongs server pings.
+func TestWsFrameConn_PongExtendsReadDeadline(t *testing.T) {
+	fc, client := newStallTestServer(t, wsConnTuning{
+		pingInterval: 100 * time.Millisecond,
+		readIdle:     300 * time.Millisecond,
+	})
+
+	if err := client.WriteMessage(websocket.TextMessage, []byte(`{"type":"ping"}`)); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+	if _, err := fc.Recv(); err != nil {
+		t.Fatalf("first recv: %v", err)
+	}
+
+	// Four readIdle windows of client silence: only control pongs flow.
+	time.Sleep(1200 * time.Millisecond)
+
+	if err := client.WriteMessage(websocket.TextMessage, []byte(`{"type":"ping"}`)); err != nil {
+		t.Fatalf("client probe write: %v", err)
+	}
+	wf, err := fc.Recv()
+	if err != nil {
+		t.Fatalf("read deadline expired despite pongs: %v", err)
+	}
+	if wf == nil {
+		t.Fatalf("nil frame")
+	}
+}
