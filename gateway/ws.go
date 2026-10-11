@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 var wsUpgradeInFlight atomic.Int32
@@ -12,6 +14,12 @@ var wsUpgradeInFlight atomic.Int32
 const (
 	wsUpgradeJitterThreshold = 8
 	wsUpgradeJitterMax       = 2 * time.Second
+
+	// wsCloseInvalidToken is the private-use WebSocket close code sent when a
+	// client PRESENTED a token that failed URLAuth. The 4000-4999 range is
+	// application-defined; 4401 = "auth presented but invalid". Clients treat
+	// it as "drop cached credentials and re-bootstrap".
+	wsCloseInvalidToken = 4401
 )
 
 // to ServeSession for all protocol logic.
@@ -48,9 +56,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				s.logger.Info("gateway: ws URL auth", "role", role, "subject", subject, "remote", r.RemoteAddr)
 			}
 		} else if r.URL.Query().Get("token") != "" {
+			// A presented-but-invalid token must fail fast: close with 4401
+			// instead of proceeding as an anonymous socket. Clients key on
+			// the close code to drop their cached credentials and
+			// re-bootstrap; a silent anonymous socket turns their claim into
+			// an authorization error loop they cannot detect (sporemind
+			// glass 2026-10-11).
 			if s.logger != nil {
-				s.logger.Warn("gateway: ws URL auth failed", "err", err, "remote", r.RemoteAddr)
+				s.logger.Warn("gateway: ws URL auth failed, rejecting", "err", err, "remote", r.RemoteAddr)
 			}
+			_ = conn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(wsCloseInvalidToken, "url-auth"),
+				time.Now().Add(time.Second))
+			return
 		}
 		// When urlAuth is configured, enable frame-level auth handshake.
 		urlAuth = s.urlAuth
